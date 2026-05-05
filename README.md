@@ -283,28 +283,24 @@ The OS upgrade is done in-place:
 
 ## Boot Configuration
 
-Uses extlinux with dual-boot (custom + stock kernel):
+**Critical:** The rootfs partition (partition 3) must have GPT type **EF00** (EFI System), not 8300. The Allwinner U-Boot only scans EFI-typed partitions for `extlinux.conf`. Changing this type will break auto-boot.
 
 ```
-# /boot/extlinux/extlinux.conf
-default l1
-menu title U-Boot menu
-prompt 1
-timeout 30
-
-label l1
-    menu label Custom Kernel 6.6.98+
-    linux /boot/vmlinuz-6.6.98+-custom
-    fdtdir /usr/lib/linux-image-custom/
-    append root=/dev/mmcblk0p3 console=ttyAS0,115200n8 rootwait clk_ignore_unused loglevel=7 rw earlycon consoleblank=0 console=tty1 coherent_pool=2M irqchip.gicv3_pseudo_nmi=0
+# /boot/extlinux/extlinux.conf (on partition 3)
+default l0
+menu title Radxa Cubie A7A Boot Menu
+prompt 0
+timeout 50
 
 label l0
-    menu label Stock Kernel 5.15.147-14-a733
-    linux /boot/vmlinuz-5.15.147-14-a733
-    initrd /boot/initrd.img-5.15.147-14-a733
-    fdtdir /usr/lib/linux-image-5.15.147-14-a733/
-    append root=UUID=... console=ttyAS0,115200n8 rootwait clk_ignore_unused quiet
+    menu label Debian 13 Linux 6.6.98+ (Overclocked)
+    linux /boot/Image
+    fdt /usr/lib/linux-image-custom/sun60i-a733-cubie-a7a.dtb
+    fdtdir /usr/lib/linux-image-custom/
+    append root=/dev/mmcblk0p3 rootwait rootfstype=ext4 console=ttyAS0,115200 loglevel=4 cma=128M
 ```
+
+Protect from being overwritten: `sudo chattr +i /boot/extlinux/extlinux.conf`
 
 Note: Custom kernel uses `root=/dev/mmcblk0p3` (not UUID) because there is no initramfs to resolve UUIDs.
 
@@ -361,5 +357,16 @@ Downloads everything automatically and flashes. No manual steps.
 
 ## Single Image File (for Etcher/RPi Imager)
 
-A single `.img.xz` file (2.6GB) is available for use with graphical imagers like Balena Etcher.
-Contact the maintainer or check releases for download links.
+A single `.img.xz` file is available in releases for use with Balena Etcher or RPi Imager. After flashing, expand the rootfs:
+
+```bash
+# Expand partition 3 to fill the card (must use type EF00!)
+sudo sgdisk -d 3 /dev/sdX
+sudo sgdisk -n 3:679936:0 -t 3:EF00 -c 3:"rootfs" /dev/sdX
+sudo partprobe /dev/sdX
+sudo e2fsck -fy /dev/sdX3
+sudo resize2fs /dev/sdX3
+
+# On first boot, regenerate SSH host keys
+sudo ssh-keygen -A && sudo systemctl restart sshd
+```

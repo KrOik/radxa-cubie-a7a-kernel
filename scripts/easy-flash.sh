@@ -10,7 +10,7 @@
 set -euo pipefail
 
 DEVICE="${1:-}"
-REPO="https://github.com/Rabs9/radxa-cubie-a7a-kernel/releases/download/v2.0.0"
+REPO="https://github.com/Rabs9/radxa-cubie-a7a-kernel/releases/download/v3.0.0"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -59,29 +59,20 @@ read -p "Continue? [y/N] " -n 1 -r
 echo
 [[ $REPLY =~ ^[Yy]$ ]] || { log "Aborted."; exit 0; }
 
-TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+IMAGE="radxa-cubie-a7a-debian13-oc-v3.0.0.img.xz"
 
 # Download
-log "Downloading boot sectors (16MB)..."
-wget -q --show-progress -O "$TMPDIR/boot-sectors.img" "$REPO/radxa-a7a-boot-sectors.img"
+log "Downloading image (1.9GB compressed, 10GB uncompressed)..."
+wget -q --show-progress -O "/tmp/$IMAGE" "$REPO/$IMAGE"
 
-log "Downloading rootfs part 1/2 (1.9GB)..."
-wget -q --show-progress -O "$TMPDIR/part-aa" "$REPO/radxa-a7a-rootfs-part-aa"
+# Flash
+log "Flashing image (decompressing + writing)..."
+xz -dc "/tmp/$IMAGE" | dd of="$DEVICE" bs=4M status=progress conv=fsync
 
-log "Downloading rootfs part 2/2 (1.8GB)..."
-wget -q --show-progress -O "$TMPDIR/part-ab" "$REPO/radxa-a7a-rootfs-part-ab"
-
-# Flash boot sectors
-log "Writing boot sectors..."
-dd if="$TMPDIR/boot-sectors.img" of="$DEVICE" bs=1M conv=notrunc status=progress
-
-# Create partitions
-log "Creating partitions..."
-sgdisk --zap-all "$DEVICE" > /dev/null 2>&1
-sgdisk -n 1:32768:65535 -t 1:8300 -c 1:"config" "$DEVICE" > /dev/null
-sgdisk -n 2:65536:679935 -t 2:EF00 -c 2:"boot" "$DEVICE" > /dev/null
-sgdisk -n 3:679936:0 -t 3:8300 -c 3:"rootfs" "$DEVICE" > /dev/null
+# Expand rootfs partition to fill card
+log "Expanding rootfs partition to fill card..."
+sgdisk -d 3 "$DEVICE" > /dev/null 2>&1
+sgdisk -n 3:679936:0 -t 3:EF00 -c 3:"rootfs" "$DEVICE" > /dev/null 2>&1
 partprobe "$DEVICE" 2>/dev/null
 sleep 2
 
@@ -92,21 +83,14 @@ else
     P3="${DEVICE}3"
 fi
 
-# Format
-log "Formatting rootfs partition..."
-mkfs.ext4 -F -q -L rootfs "$P3"
+# Expand filesystem
+log "Expanding filesystem..."
+e2fsck -fy "$P3" > /dev/null 2>&1
+resize2fs "$P3" > /dev/null 2>&1
 
-# Extract rootfs
-log "Extracting rootfs (this takes a few minutes)..."
-mount "$P3" /mnt
-cat "$TMPDIR/part-aa" "$TMPDIR/part-ab" | tar xzf - -C /mnt
-mkdir -p /mnt/{proc,sys,dev,run,tmp,mnt,media}
-
-# Ensure root device is correct
-sed -i 's|root=UUID=[^ ]*|root=/dev/mmcblk0p3|g' /mnt/boot/extlinux/extlinux.conf 2>/dev/null || true
-
+# Cleanup
+rm -f "/tmp/$IMAGE"
 sync
-umount /mnt
 
 echo ""
 log "╔══════════════════════════════════════════════════════╗"
