@@ -370,3 +370,22 @@ sudo resize2fs /dev/sdX3
 # On first boot, regenerate SSH host keys
 sudo ssh-keygen -A && sudo systemctl restart sshd
 ```
+
+## A7Z UFS Boot Fix
+
+If the release rootfs is extracted to onboard UFS on Cubie A7Z, U-Boot may scan
+the EFI-typed UFS partition (`sunxi_flash_ufs 0:2`, normally `/dev/sda2`) while
+`extlinux.conf` still lives inside the rootfs partition (`/dev/sda3`). The tested
+minimal repair is:
+
+```bash
+sudo bash scripts/fix-a7z-ufs-boot.sh
+```
+
+The script populates `/dev/sda2` with the kernel, DTB, and extlinux menu, points
+the rootfs at `/dev/sda3`, keeps a 5.15 A7Z fallback, and makes the 6.6.98+
+custom kernel the default. It also repairs the known trailing `fi` parse error in
+`/home/radxa/.bashrc` if present.
+
+This script intentionally does **not** change HDMI, SDDM, Wayland/X11, or desktop
+configuration. HDMI output is not yet validated on the A7Z UFS setup.
