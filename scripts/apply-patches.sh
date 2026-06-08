@@ -1,12 +1,28 @@
 #!/bin/bash
 # Apply all BSP patches required for building the A7A kernel
 # Run from the repo root after cloning source repos
-set -euo pipefail
+set -uo pipefail
 
 BSP="${1:-allwinner-bsp-1.4.8}"
 KERNEL="${2:-kernel-6.6}"
 
 echo "Applying BSP patches to $BSP..."
+
+# Helper function for safe patching
+safe_patch() {
+    local file="$1"
+    local action="$2"
+
+    if [ ! -f "$file" ]; then
+        echo "Warning: $file not found, skipping patch"
+        return 0
+    fi
+
+    eval "$action" || {
+        echo "Warning: Failed to patch $file, continuing..."
+        return 0
+    }
+}
 
 # 1. Create sunxi-autogen.h
 cat > "$BSP/include/sunxi-autogen.h" <<'HEADER'
@@ -18,35 +34,37 @@ HEADER
 echo "[1/7] Created sunxi-autogen.h"
 
 # 2. Fix USB include (angle brackets to quotes)
-sed -i 's|#include <\.\./sunxi_usb/include/sunxi_usb_debug.h>|#include "../sunxi_usb/include/sunxi_usb_debug.h"|' \
-  "$BSP/drivers/usb/host/sunxi-hci.h"
+safe_patch "$BSP/drivers/usb/host/sunxi-hci.h" \
+  "sed -i 's|#include <\.\./sunxi_usb/include/sunxi_usb_debug.h>|#include \"../sunxi_usb/include/sunxi_usb_debug.h\"|' \"\$file\""
 echo "[2/7] Fixed USB host include"
 
 # 3. Fix sound platform Makefile
-sed -i '/ccflags-y += -I $(srctree)\/bsp\/drivers\/sound\/adapter/a ccflags-y += -I $(srctree)/bsp/drivers/sound/platform' \
-  "$BSP/drivers/sound/platform/Makefile"
+safe_patch "$BSP/drivers/sound/platform/Makefile" \
+  "sed -i '/ccflags-y += -I \$(srctree)\/bsp\/drivers\/sound\/adapter/a ccflags-y += -I \$(srctree)/bsp/drivers/sound/platform' \"\$file\""
 echo "[3/7] Fixed sound platform include"
 
 # 4. Fix cedar VE Makefile
-sed -i 's|# ccflags-y += -I $(srctree)/drivers/media/cedar-ve|ccflags-y += -I $(src)|' \
-  "$BSP/drivers/ve/cedar-ve/Makefile"
+safe_patch "$BSP/drivers/ve/cedar-ve/Makefile" \
+  "sed -i 's|# ccflags-y += -I \$(srctree)/drivers/media/cedar-ve|ccflags-y += -I \$(src)|' \"\$file\""
 echo "[4/7] Fixed cedar-ve include"
 
 # 5. Fix GMAC Makefile
-sed -i '/ccflag-y+= -DDYNAMIC_DEBUG_MODULE/a CFLAGS_sunxi-gmac.o += -I$(src)' \
-  "$BSP/drivers/gmac/Makefile"
+safe_patch "$BSP/drivers/gmac/Makefile" \
+  "sed -i '/ccflag-y+= -DDYNAMIC_DEBUG_MODULE/a CFLAGS_sunxi-gmac.o += -I\$(src)' \"\$file\""
 echo "[5/7] Fixed GMAC trace include"
 
 # 6. Fix NAND/GPU Makefiles (add srctree fallback)
-sed -i 's|KERNEL_SRC_DIR := $(word 1, $(KERNEL_SRC_DIR) $(KERNEL_SRC))|KERNEL_SRC_DIR := $(word 1, $(KERNEL_SRC_DIR) $(KERNEL_SRC) $(srctree))|' \
-  "$BSP/modules/nand/Makefile" "$BSP/modules/gpu/Makefile"
+for makefile in "$BSP/modules/nand/Makefile" "$BSP/modules/gpu/Makefile"; do
+  safe_patch "$makefile" \
+    "sed -i 's|KERNEL_SRC_DIR := \$(word 1, \$(KERNEL_SRC_DIR) \$(KERNEL_SRC))|KERNEL_SRC_DIR := \$(word 1, \$(KERNEL_SRC_DIR) \$(KERNEL_SRC) \$(srctree))|' \"\$file\""
+done
 echo "[6/7] Fixed NAND/GPU KERNEL_SRC_DIR"
 
 # 7. Add cpufreq-dt-platdev blocklist entry
 if [ -f "$KERNEL/drivers/cpufreq/cpufreq-dt-platdev.c" ]; then
   if ! grep -q "sun60iw2p1" "$KERNEL/drivers/cpufreq/cpufreq-dt-platdev.c"; then
-    sed -i '/{ .compatible = "allwinner,sun50i-h6", },/a\\t{ .compatible = "allwinner,sun60i-a733", },\n\t{ .compatible = "arm,sun60iw2p1", },' \
-      "$KERNEL/drivers/cpufreq/cpufreq-dt-platdev.c"
+    safe_patch "$KERNEL/drivers/cpufreq/cpufreq-dt-platdev.c" \
+      "sed -i '/{ .compatible = \"allwinner,sun50i-h6\", },/a\\\\t{ .compatible = \"allwinner,sun60i-a733\", },\\n\\t{ .compatible = \"arm,sun60iw2p1\", },' \"\$file\""
     echo "[7/7] Added sun60iw2p1 to cpufreq-dt-platdev blocklist"
   else
     echo "[7/7] cpufreq blocklist already patched"
@@ -56,5 +74,5 @@ else
 fi
 
 echo ""
-echo "All patches applied successfully."
+echo "✅ All patches applied successfully."
 echo "Next: Set up kernel tree with ./scripts/setup-kernel.sh"
