@@ -1,0 +1,9 @@
+label Radxa Cubie A7Z (Custom 6.6.98+ Overclocked)
+  kernel /Image
+  fdt /allwinner/sun60i-a733-cubie-a7z.dtb
+  append root=/dev/sda3 rw rootwait console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000
+
+label Radxa Cubie A7Z (Recovery)
+  kernel /Image
+  fdt /allwinner/sun60i-a733-cubie-a7z.dtb
+  append root=/dev/sda3 ro single console=ttyS0,115200
