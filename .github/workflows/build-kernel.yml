@@ -258,31 +258,52 @@ jobs:
           echo "Decompressing stock image..."
           pixz -d stock-a7z.img.xz
 
+          # Verify image structure
+          echo "Checking image partition table..."
+          fdisk -l stock-a7z.img || true
+          file stock-a7z.img
+
           # Extract first 16 MB (boot0 + U-Boot)
           echo "Extracting boot sectors..."
           mkdir -p extracted_a7z
           dd if=stock-a7z.img of=extracted_a7z/boot-sectors.img bs=1M count=16
 
-          # Also extract rootfs for minimal Debian base
-          echo "Mounting stock image to extract minimal rootfs..."
-
-          # Use kpartx instead of losetup -P (more reliable on GitHub Actions)
-          sudo apt-get install -y kpartx
-
-          # Create device mappings
+          # Use kpartx to create device mappings
+          echo "Creating partition mappings with kpartx..."
           sudo kpartx -av stock-a7z.img
           sleep 3
 
           # List created mappings
+          echo "Available device mappings:"
           ls -la /dev/mapper/ || true
 
+          # Check if mappings were created
+          ROOTFS_DEV=$(ls /dev/mapper/loop*p3 2>/dev/null | head -1 || echo "")
+          if [ -z "$ROOTFS_DEV" ]; then
+            echo "ERROR: kpartx did not create partition mappings"
+            echo "Trying alternative: losetup with partition scan..."
+
+            # Fallback to losetup with explicit partx
+            LOOP_DEV=$(sudo losetup -f --show stock-a7z.img)
+            echo "Loop device: $LOOP_DEV"
+
+            # Force partition scan with partx
+            sudo partx -av "$LOOP_DEV" || true
+            sleep 2
+
+            # List partitions
+            ls -la ${LOOP_DEV}* || true
+            lsblk "$LOOP_DEV" || true
+
+            ROOTFS_DEV="${LOOP_DEV}p3"
+          fi
+
+          echo "Using rootfs device: $ROOTFS_DEV"
+
           sudo mkdir -p /mnt/stock_rootfs
-          # kpartx creates /dev/mapper/loopXpY devices
-          ROOTFS_DEV=$(ls /dev/mapper/loop*p3 | head -1)
-          echo "Mounting rootfs from: $ROOTFS_DEV"
           sudo mount "$ROOTFS_DEV" /mnt/stock_rootfs
 
-          # Create minimal rootfs tarball (exclude kernel modules, we'll use ours)
+          # Create minimal rootfs tarball
           echo "Creating minimal rootfs tarball..."
           sudo tar -czf minimal-rootfs.tar.gz \
             --exclude='./lib/modules/*' \
@@ -291,11 +312,14 @@ jobs:
             --exclude='./tmp/*' \
             -C /mnt/stock_rootfs .
 
+          # Cleanup
           sudo umount /mnt/stock_rootfs
-          sudo kpartx -d stock-a7z.img
+          if [ -n "$LOOP_DEV" ]; then
+            sudo losetup -d "$LOOP_DEV" || true
+          else
+            sudo kpartx -d stock-a7z.img || true
+          fi
           sudo rmdir /mnt/stock_rootfs
-
-          # Cleanup large stock image
           rm -f stock-a7z.img
 
           echo "✓ Boot sectors and minimal rootfs extracted"
@@ -314,14 +338,23 @@ jobs:
           # Run image builder
           sudo bash scripts/build-complete-image.sh "$KERNEL_TARBALL" radxa-cubie-a7z-custom.img
 
-          # Mount image to add rootfs using kpartx
+          # Mount image to add rootfs - try kpartx first, fallback to losetup+partx
           echo "Adding Debian rootfs to image..."
+
           sudo kpartx -av radxa-cubie-a7z-custom.img
           sleep 3
 
-          sudo mkdir -p /mnt/img_rootfs
-          ROOTFS_DEV=$(ls /dev/mapper/loop*p3 | tail -1)
+          ROOTFS_DEV=$(ls /dev/mapper/loop*p3 2>/dev/null | tail -1 || echo "")
+          if [ -z "$ROOTFS_DEV" ]; then
+            echo "kpartx failed, using losetup+partx..."
+            LOOP_DEV=$(sudo losetup -f --show radxa-cubie-a7z-custom.img)
+            sudo partx -av "$LOOP_DEV" || true
+            sleep 2
+            ROOTFS_DEV="${LOOP_DEV}p3"
+          fi
+
           echo "Mounting rootfs at: $ROOTFS_DEV"
+          sudo mkdir -p /mnt/img_rootfs
           sudo mount "$ROOTFS_DEV" /mnt/img_rootfs
 
           # Extract minimal rootfs
@@ -345,7 +378,11 @@ jobs:
 
           # Cleanup and unmount
           sudo umount /mnt/img_rootfs
-          sudo kpartx -d radxa-cubie-a7z-custom.img
+          if [ -n "$LOOP_DEV" ]; then
+            sudo losetup -d "$LOOP_DEV" || true
+          else
+            sudo kpartx -d radxa-cubie-a7z-custom.img || true
+          fi
           sudo rmdir /mnt/img_rootfs
 
           echo "✓ Complete bootable image created"

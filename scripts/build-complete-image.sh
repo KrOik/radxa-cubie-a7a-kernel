@@ -89,28 +89,42 @@ sfdisk --part-type "$OUTPUT_IMAGE" 3 8300  # Linux filesystem
 echo "✓ Partition table created"
 parted -s "$OUTPUT_IMAGE" print
 
-# Step 3: Setup loop device with kpartx
+# Step 3: Setup loop device with partx
 echo ""
-echo "[3/9] Setting up loop device with kpartx..."
+echo "[3/9] Setting up loop device..."
+# Try kpartx first
 sudo kpartx -av "$OUTPUT_IMAGE"
 sleep 2
 
-# Find the loop device that was created
-LOOP_BASE=$(sudo losetup -j "$OUTPUT_IMAGE" | cut -d: -f1)
-if [ -z "$LOOP_BASE" ]; then
-    echo "Error: Failed to find loop device"
-    exit 1
+MAPPER_PREFIX=""
+# Check if kpartx created mappings
+if ls /dev/mapper/loop*p1 &>/dev/null; then
+    LOOP_BASE=$(sudo losetup -j "$OUTPUT_IMAGE" | cut -d: -f1)
+    MAPPER_PREFIX=$(basename "$LOOP_BASE")
+    echo "✓ Using kpartx mappings: /dev/mapper/${MAPPER_PREFIX}pX"
+else
+    echo "kpartx failed, using losetup+partx..."
+    LOOP_BASE=$(sudo losetup -f --show "$OUTPUT_IMAGE")
+    sudo partx -av "$LOOP_BASE" || true
+    sleep 2
+    MAPPER_PREFIX=""
+    echo "✓ Using direct partitions: ${LOOP_BASE}pX"
 fi
-echo "✓ Loop device: $LOOP_BASE"
 
 # Step 4: Format partitions
 echo ""
 echo "[4/9] Formatting partitions..."
-# kpartx creates /dev/mapper/loopXpY devices
-MAPPER_PREFIX=$(basename "$LOOP_BASE")
-sudo mkfs.ext4 -F -L config "/dev/mapper/${MAPPER_PREFIX}p1"
-sudo mkfs.vfat -F 32 -n BOOT "/dev/mapper/${MAPPER_PREFIX}p2"
-sudo mkfs.ext4 -F -L rootfs "/dev/mapper/${MAPPER_PREFIX}p3"
+if [ -n "$MAPPER_PREFIX" ]; then
+    # Using kpartx mappings
+    sudo mkfs.ext4 -F -L config "/dev/mapper/${MAPPER_PREFIX}p1"
+    sudo mkfs.vfat -F 32 -n BOOT "/dev/mapper/${MAPPER_PREFIX}p2"
+    sudo mkfs.ext4 -F -L rootfs "/dev/mapper/${MAPPER_PREFIX}p3"
+else
+    # Using direct partitions
+    sudo mkfs.ext4 -F -L config "${LOOP_BASE}p1"
+    sudo mkfs.vfat -F 32 -n BOOT "${LOOP_BASE}p2"
+    sudo mkfs.ext4 -F -L rootfs "${LOOP_BASE}p3"
+fi
 echo "✓ Partitions formatted"
 
 # Step 5: Mount partitions
@@ -120,9 +134,15 @@ sudo mkdir -p "$WORK_DIR/mnt/config"
 sudo mkdir -p "$WORK_DIR/mnt/boot"
 sudo mkdir -p "$WORK_DIR/mnt/rootfs"
 
-sudo mount "/dev/mapper/${MAPPER_PREFIX}p1" "$WORK_DIR/mnt/config"
-sudo mount "/dev/mapper/${MAPPER_PREFIX}p2" "$WORK_DIR/mnt/boot"
-sudo mount "/dev/mapper/${MAPPER_PREFIX}p3" "$WORK_DIR/mnt/rootfs"
+if [ -n "$MAPPER_PREFIX" ]; then
+    sudo mount "/dev/mapper/${MAPPER_PREFIX}p1" "$WORK_DIR/mnt/config"
+    sudo mount "/dev/mapper/${MAPPER_PREFIX}p2" "$WORK_DIR/mnt/boot"
+    sudo mount "/dev/mapper/${MAPPER_PREFIX}p3" "$WORK_DIR/mnt/rootfs"
+else
+    sudo mount "${LOOP_BASE}p1" "$WORK_DIR/mnt/config"
+    sudo mount "${LOOP_BASE}p2" "$WORK_DIR/mnt/boot"
+    sudo mount "${LOOP_BASE}p3" "$WORK_DIR/mnt/rootfs"
+fi
 echo "✓ Partitions mounted"
 
 # Step 6: Extract kernel tarball
@@ -210,7 +230,11 @@ fi
 echo ""
 echo "Cleaning up..."
 sudo umount "$WORK_DIR/mnt/config" "$WORK_DIR/mnt/boot" "$WORK_DIR/mnt/rootfs" 2>/dev/null || true
-sudo kpartx -d "$OUTPUT_IMAGE"
+if [ -n "$MAPPER_PREFIX" ]; then
+    sudo kpartx -d "$OUTPUT_IMAGE"
+else
+    sudo losetup -d "$LOOP_BASE" || true
+fi
 sudo rm -rf "$WORK_DIR"
 
 echo ""
