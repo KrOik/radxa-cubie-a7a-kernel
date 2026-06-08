@@ -92,9 +92,8 @@ parted -s "$OUTPUT_IMAGE" print
 # Step 3: Setup loop device
 echo ""
 echo "[3/9] Setting up loop device..."
-LOOP_DEV=$(sudo losetup -f --show "$OUTPUT_IMAGE")
-sudo partprobe "$LOOP_DEV"
-sleep 1
+LOOP_DEV=$(sudo losetup -f --show -P "$OUTPUT_IMAGE")
+sleep 2
 echo "✓ Loop device: $LOOP_DEV"
 
 # Step 4: Format partitions

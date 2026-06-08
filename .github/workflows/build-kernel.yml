@@ -265,9 +265,14 @@ jobs:
 
           # Also extract rootfs for minimal Debian base
           echo "Mounting stock image to extract minimal rootfs..."
-          LOOP_DEV=$(sudo losetup -f --show stock-a7z.img)
-          sudo partprobe "$LOOP_DEV"
+          LOOP_DEV=$(sudo losetup -f --show -P stock-a7z.img)
+          sleep 3
+
+          # List available partitions
+          ls -la /dev/loop* || true
+          sudo partprobe "$LOOP_DEV" || true
           sleep 2
+          lsblk "$LOOP_DEV" || true
 
           sudo mkdir -p /mnt/stock_rootfs
           sudo mount "${LOOP_DEV}p3" /mnt/stock_rootfs
@@ -306,9 +311,8 @@ jobs:
 
           # Mount image to add rootfs
           echo "Adding Debian rootfs to image..."
-          LOOP_DEV=$(sudo losetup -f --show radxa-cubie-a7z-custom.img)
-          sudo partprobe "$LOOP_DEV"
-          sleep 2
+          LOOP_DEV=$(sudo losetup -f --show -P radxa-cubie-a7z-custom.img)
+          sleep 3
 
           sudo mkdir -p /mnt/img_rootfs
           sudo mount "${LOOP_DEV}p3" /mnt/img_rootfs
