@@ -1,0 +1,218 @@
+name: Build Radxa Cubie Kernel
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      board:
+        description: 'Board type to build'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - a7a
+          - a7z
+          - both
+
+env:
+  KERNEL_BRANCH: allwinner-aiot-linux-6.6
+  BSP_BRANCH: cubie-aiot-v1.4.8
+  BSP_WIFI_BRANCH: cubie-aiot-v1.4.6
+  DEVICE_BRANCH: device-a733-v1.4.8
+
+jobs:
+  build-kernel:
+    name: Build Kernel (${{ matrix.board }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [a7a, a7z]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            bc device-tree-compiler cpio kmod \
+            python3 swig flex bison \
+            libssl-dev libncurses-dev libelf-dev \
+            git wget curl xz-utils \
+            parted dosfstools e2fsprogs \
+            qemu-user-static binfmt-support
+
+      - name: Show toolchain version
+        run: |
+          aarch64-linux-gnu-gcc --version
+          make --version
+
+      - name: Cache source repositories
+        id: cache-sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            kernel-6.6
+            allwinner-bsp-1.4.8
+            allwinner-bsp-1.4.6
+            allwinner-device-1.4.8
+          key: sources-${{ env.KERNEL_BRANCH }}-${{ env.BSP_BRANCH }}-${{ hashFiles('scripts/*.sh') }}
+          restore-keys: |
+            sources-${{ env.KERNEL_BRANCH }}-${{ env.BSP_BRANCH }}-
+            sources-${{ env.KERNEL_BRANCH }}-
+
+      - name: Clone upstream sources
+        if: steps.cache-sources.outputs.cache-hit != 'true'
+        run: |
+          echo "Cloning kernel repository..."
+          git clone --branch ${{ env.KERNEL_BRANCH }} --depth 1 \
+            https://github.com/radxa/kernel.git kernel-6.6
+
+          echo "Cloning BSP repository v1.4.8..."
+          git clone --branch ${{ env.BSP_BRANCH }} --depth 1 \
+            https://github.com/radxa/allwinner-bsp.git allwinner-bsp-1.4.8
+
+          echo "Cloning BSP repository v1.4.6 (WiFi driver)..."
+          git clone --branch ${{ env.BSP_WIFI_BRANCH }} --depth 1 \
+            https://github.com/radxa/allwinner-bsp.git allwinner-bsp-1.4.6
+
+          echo "Cloning device repository..."
+          git clone --branch ${{ env.DEVICE_BRANCH }} --depth 1 \
+            https://github.com/radxa/allwinner-device.git allwinner-device-1.4.8
+
+      - name: Apply patches
+        run: |
+          if [ -f scripts/apply-patches.sh ]; then
+            bash scripts/apply-patches.sh || echo "No patches to apply"
+          fi
+
+      - name: Setup kernel tree
+        run: |
+          bash scripts/setup-kernel.sh
+
+      - name: Configure kernel
+        run: |
+          cd kernel-6.6
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            BSP_TOP=bsp/ cubie_a7a_defconfig
+
+          # Show kernel version
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            BSP_TOP=bsp/ kernelrelease
+
+      - name: Build kernel Image and DTBs
+        run: |
+          cd kernel-6.6
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            BSP_TOP=bsp/ -j$(nproc) Image dtbs
+
+      - name: Build kernel modules
+        run: |
+          cd kernel-6.6
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            BSP_TOP=bsp/ -j$(nproc) modules
+
+      - name: Install modules
+        run: |
+          cd kernel-6.6
+          KERNEL_VERSION=$(make -s kernelrelease)
+          mkdir -p ../artifacts/${{ matrix.board }}/lib/modules
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            modules_install \
+            INSTALL_MOD_PATH=../artifacts/${{ matrix.board }} \
+            INSTALL_MOD_STRIP=1
+
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
+
+      - name: Package build artifacts
+        run: |
+          mkdir -p artifacts/${{ matrix.board }}/boot
+
+          # Copy kernel Image
+          cp kernel-6.6/arch/arm64/boot/Image \
+            artifacts/${{ matrix.board }}/boot/
+
+          # Copy DTBs
+          cp kernel-6.6/arch/arm64/boot/dts/allwinner/sun60i-a733-cubie-*.dtb \
+            artifacts/${{ matrix.board }}/boot/ || true
+
+          # Create version file
+          echo "${{ env.KERNEL_VERSION }}" > \
+            artifacts/${{ matrix.board }}/boot/kernel-version.txt
+
+          # Create manifest
+          cat > artifacts/${{ matrix.board }}/boot/build-info.txt <<EOF
+          Board: ${{ matrix.board }}
+          Kernel: ${{ env.KERNEL_VERSION }}
+          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          Git Commit: ${{ github.sha }}
+          Workflow: ${{ github.workflow }}
+          EOF
+
+          # Show artifact size
+          du -sh artifacts/${{ matrix.board }}
+
+      - name: Create release tarball
+        run: |
+          cd artifacts/${{ matrix.board }}
+          tar -czf ../../radxa-cubie-${{ matrix.board }}-kernel-${GITHUB_SHA:0:7}.tar.gz *
+          cd ../..
+          sha256sum radxa-cubie-${{ matrix.board }}-kernel-${GITHUB_SHA:0:7}.tar.gz > \
+            radxa-cubie-${{ matrix.board }}-kernel-${GITHUB_SHA:0:7}.tar.gz.sha256
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.board }}-${{ github.sha }}
+          path: artifacts/${{ matrix.board }}/
+          retention-days: 30
+          compression-level: 9
+
+      - name: Upload release tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tarball-${{ matrix.board }}
+          path: |
+            radxa-cubie-${{ matrix.board }}-kernel-*.tar.gz
+            radxa-cubie-${{ matrix.board }}-kernel-*.tar.gz.sha256
+          retention-days: 90
+
+  build-summary:
+    name: Build Summary
+    needs: build-kernel
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check build status
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Board | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.build-kernel.result }}" == "success" ]; then
+            echo "| A7A | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+            echo "| A7Z | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| A7A | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+            echo "| A7Z | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts are available in the Actions tab for 30 days." >> $GITHUB_STEP_SUMMARY

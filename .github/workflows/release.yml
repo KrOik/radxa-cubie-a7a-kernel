@@ -1,0 +1,162 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  KERNEL_BRANCH: allwinner-aiot-linux-6.6
+  BSP_BRANCH: cubie-aiot-v1.4.8
+  BSP_WIFI_BRANCH: cubie-aiot-v1.4.6
+  DEVICE_BRANCH: device-a733-v1.4.8
+
+jobs:
+  create-release:
+    name: Build and Release (${{ matrix.board }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [a7a, a7z]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            bc device-tree-compiler cpio kmod \
+            python3 swig flex bison \
+            libssl-dev libncurses-dev libelf-dev \
+            git wget curl xz-utils \
+            parted dosfstools e2fsprogs
+
+      - name: Clone upstream sources
+        run: |
+          git clone --branch ${{ env.KERNEL_BRANCH }} --depth 1 \
+            https://github.com/radxa/kernel.git kernel-6.6
+          git clone --branch ${{ env.BSP_BRANCH }} --depth 1 \
+            https://github.com/radxa/allwinner-bsp.git allwinner-bsp-1.4.8
+          git clone --branch ${{ env.BSP_WIFI_BRANCH }} --depth 1 \
+            https://github.com/radxa/allwinner-bsp.git allwinner-bsp-1.4.6
+          git clone --branch ${{ env.DEVICE_BRANCH }} --depth 1 \
+            https://github.com/radxa/allwinner-device.git allwinner-device-1.4.8
+
+      - name: Setup and build kernel
+        run: |
+          bash scripts/setup-kernel.sh
+          cd kernel-6.6
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            BSP_TOP=bsp/ cubie_a7a_defconfig
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            BSP_TOP=bsp/ -j$(nproc) Image dtbs modules
+
+      - name: Package release
+        run: |
+          KERNEL_VERSION=$(cd kernel-6.6 && make -s kernelrelease)
+          RELEASE_NAME="radxa-cubie-${{ matrix.board }}-kernel-${KERNEL_VERSION}"
+
+          mkdir -p release/${RELEASE_NAME}/boot
+          mkdir -p release/${RELEASE_NAME}/lib/modules
+
+          # Copy kernel and DTBs
+          cp kernel-6.6/arch/arm64/boot/Image release/${RELEASE_NAME}/boot/
+          cp kernel-6.6/arch/arm64/boot/dts/allwinner/sun60i-a733-cubie-*.dtb \
+            release/${RELEASE_NAME}/boot/ || true
+
+          # Install modules
+          cd kernel-6.6
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            modules_install INSTALL_MOD_PATH=../release/${RELEASE_NAME} \
+            INSTALL_MOD_STRIP=1
+          cd ..
+
+          # Create release notes
+          cat > release/${RELEASE_NAME}/RELEASE_NOTES.txt <<EOF
+          Radxa Cubie ${{ matrix.board }} Custom Kernel Release
+
+          Kernel Version: ${KERNEL_VERSION}
+          Board: ${{ matrix.board }}
+          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          Git Commit: ${{ github.sha }}
+
+          Contents:
+          - boot/Image: Kernel image
+          - boot/sun60i-a733-cubie-*.dtb: Device tree blobs
+          - lib/modules/${KERNEL_VERSION}/: Kernel modules
+
+          Installation:
+          1. Copy boot/Image to /boot/ on target device
+          2. Copy boot/*.dtb to /usr/lib/linux-image-custom/allwinner/
+          3. Copy lib/modules/* to /lib/modules/
+          4. Update extlinux.conf and reboot
+
+          For detailed instructions, see README.md
+          EOF
+
+          # Create tarball
+          cd release
+          tar -czf ${RELEASE_NAME}.tar.gz ${RELEASE_NAME}/
+          sha256sum ${RELEASE_NAME}.tar.gz > ${RELEASE_NAME}.tar.gz.sha256
+
+          echo "RELEASE_FILE=${RELEASE_NAME}.tar.gz" >> $GITHUB_ENV
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            release/*.tar.gz
+            release/*.sha256
+          body: |
+            # Radxa Cubie ${{ matrix.board }} Kernel Release
+
+            **Kernel Version:** ${{ env.KERNEL_VERSION }}
+            **Board:** ${{ matrix.board }}
+            **Build Date:** ${{ github.event.head_commit.timestamp }}
+
+            ## Installation
+
+            ```bash
+            # Download and extract
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ env.RELEASE_FILE }}
+            tar -xzf ${{ env.RELEASE_FILE }}
+            cd radxa-cubie-${{ matrix.board }}-kernel-*
+
+            # Install (on target device)
+            sudo cp boot/Image /boot/vmlinuz-custom
+            sudo mkdir -p /usr/lib/linux-image-custom/allwinner
+            sudo cp boot/*.dtb /usr/lib/linux-image-custom/allwinner/
+            sudo cp -r lib/modules/* /lib/modules/
+            sudo depmod -a
+
+            # Update boot config and reboot
+            sudo nano /boot/extlinux/extlinux.conf
+            sudo reboot
+            ```
+
+            ## What's Changed
+
+            See [CHANGELOG](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }})
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
