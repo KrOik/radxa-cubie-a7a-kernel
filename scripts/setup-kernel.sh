@@ -1,6 +1,6 @@
 #!/bin/bash
 # Enhanced setup script with board parameter support
-set -euo pipefail
+set -uo pipefail
 
 BOARD="${1:-a7a}"
 BSP="${2:-allwinner-bsp-1.4.8}"
@@ -27,8 +27,13 @@ fi
 DTS_DIR="$KERNEL/arch/arm64/boot/dts/allwinner"
 echo "[2/5] Copying DTS files..."
 
-cp "$BSP/configs/linux-6.6/sun60iw2p1.dtsi" "$DTS_DIR/"
-cp "$BSP/configs/linux-6.6/sun60iw2p1-cpu-vf.dtsi" "$DTS_DIR/"
+# Copy base DTSI files if they exist
+if [ -f "$BSP/configs/linux-6.6/sun60iw2p1.dtsi" ]; then
+    cp "$BSP/configs/linux-6.6/sun60iw2p1.dtsi" "$DTS_DIR/" || true
+fi
+if [ -f "$BSP/configs/linux-6.6/sun60iw2p1-cpu-vf.dtsi" ]; then
+    cp "$BSP/configs/linux-6.6/sun60iw2p1-cpu-vf.dtsi" "$DTS_DIR/" || true
+fi
 
 # Board-specific DTS
 if [ -f "$DEVICE/configs/cubie_${BOARD}/linux-6.6/board.dts" ]; then
@@ -39,10 +44,13 @@ elif [ -f "configs/board-overclocked.dts" ]; then
     echo "Using project board-overclocked.dts for ${BOARD}"
     cp "configs/board-overclocked.dts" \
        "$DTS_DIR/sun60i-a733-cubie-${BOARD}.dts"
-else
-    echo "Warning: No board.dts found, using A7A as template"
+elif [ -f "$DEVICE/configs/cubie_a7a/linux-6.6/board.dts" ]; then
+    echo "Warning: No ${BOARD} board.dts found, using A7A as template"
     cp "$DEVICE/configs/cubie_a7a/linux-6.6/board.dts" \
        "$DTS_DIR/sun60i-a733-cubie-${BOARD}.dts"
+else
+    echo "Error: Cannot find any board.dts file!"
+    exit 1
 fi
 
 # Copy overclocked DTSI if available
