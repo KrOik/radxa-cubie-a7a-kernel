@@ -237,7 +237,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            parted sfdisk gdisk \
+            parted gdisk util-linux \
             dosfstools e2fsprogs \
             xz-utils pixz \
             qemu-user-static binfmt-support
