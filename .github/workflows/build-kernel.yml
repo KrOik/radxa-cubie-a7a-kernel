@@ -330,7 +330,14 @@ jobs:
       - name: Compress image
         run: |
           echo "Compressing image with xz (level 9)..."
-          xz -9 -T0 -v --no-adjust radxa-cubie-a7z-custom.img || xz -9 -T0 radxa-cubie-a7z-custom.img
+          # xz will complain about setting file group but compression succeeds
+          xz -9 -T0 -v radxa-cubie-a7z-custom.img 2>&1 | grep -v "Cannot set the file group" || true
+
+          # Verify compressed file exists
+          if [ ! -f radxa-cubie-a7z-custom.img.xz ]; then
+            echo "ERROR: Compression failed - output file not found"
+            exit 1
+          fi
 
           # Calculate checksum
           sha256sum radxa-cubie-a7z-custom.img.xz > radxa-cubie-a7z-custom.img.xz.sha256
