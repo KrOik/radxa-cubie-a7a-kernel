@@ -71,7 +71,7 @@ jobs:
             allwinner-bsp-1.4.8
             allwinner-bsp-1.4.6
             allwinner-device-1.4.8
-          key: sources-${{ env.KERNEL_BRANCH }}-${{ env.BSP_BRANCH }}-${{ hashFiles('scripts/*.sh') }}
+          key: sources-${{ env.KERNEL_BRANCH }}-${{ env.BSP_BRANCH }}-${{ env.DEVICE_BRANCH }}
           restore-keys: |
             sources-${{ env.KERNEL_BRANCH }}-${{ env.BSP_BRANCH }}-
             sources-${{ env.KERNEL_BRANCH }}-
@@ -79,6 +79,10 @@ jobs:
       - name: Clone upstream sources
         if: steps.cache-sources.outputs.cache-hit != 'true'
         run: |
+          # Clean up any partial clones from restore-keys
+          rm -rf kernel-6.6 allwinner-bsp-1.4.8 allwinner-bsp-1.4.6 allwinner-device-1.4.8
+
+
           echo "Cloning kernel repository..."
           git clone --branch ${{ env.KERNEL_BRANCH }} --depth 1 \
             https://github.com/radxa/kernel.git kernel-6.6 || exit 1
