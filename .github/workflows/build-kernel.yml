@@ -265,17 +265,22 @@ jobs:
 
           # Also extract rootfs for minimal Debian base
           echo "Mounting stock image to extract minimal rootfs..."
-          LOOP_DEV=$(sudo losetup -f --show -P stock-a7z.img)
+
+          # Use kpartx instead of losetup -P (more reliable on GitHub Actions)
+          sudo apt-get install -y kpartx
+
+          # Create device mappings
+          sudo kpartx -av stock-a7z.img
           sleep 3
 
-          # List available partitions
-          ls -la /dev/loop* || true
-          sudo partprobe "$LOOP_DEV" || true
-          sleep 2
-          lsblk "$LOOP_DEV" || true
+          # List created mappings
+          ls -la /dev/mapper/ || true
 
           sudo mkdir -p /mnt/stock_rootfs
-          sudo mount "${LOOP_DEV}p3" /mnt/stock_rootfs
+          # kpartx creates /dev/mapper/loopXpY devices
+          ROOTFS_DEV=$(ls /dev/mapper/loop*p3 | head -1)
+          echo "Mounting rootfs from: $ROOTFS_DEV"
+          sudo mount "$ROOTFS_DEV" /mnt/stock_rootfs
 
           # Create minimal rootfs tarball (exclude kernel modules, we'll use ours)
           echo "Creating minimal rootfs tarball..."
@@ -287,7 +292,7 @@ jobs:
             -C /mnt/stock_rootfs .
 
           sudo umount /mnt/stock_rootfs
-          sudo losetup -d "$LOOP_DEV"
+          sudo kpartx -d stock-a7z.img
           sudo rmdir /mnt/stock_rootfs
 
           # Cleanup large stock image
@@ -309,13 +314,15 @@ jobs:
           # Run image builder
           sudo bash scripts/build-complete-image.sh "$KERNEL_TARBALL" radxa-cubie-a7z-custom.img
 
-          # Mount image to add rootfs
+          # Mount image to add rootfs using kpartx
           echo "Adding Debian rootfs to image..."
-          LOOP_DEV=$(sudo losetup -f --show -P radxa-cubie-a7z-custom.img)
+          sudo kpartx -av radxa-cubie-a7z-custom.img
           sleep 3
 
           sudo mkdir -p /mnt/img_rootfs
-          sudo mount "${LOOP_DEV}p3" /mnt/img_rootfs
+          ROOTFS_DEV=$(ls /dev/mapper/loop*p3 | tail -1)
+          echo "Mounting rootfs at: $ROOTFS_DEV"
+          sudo mount "$ROOTFS_DEV" /mnt/img_rootfs
 
           # Extract minimal rootfs
           sudo tar -xzf minimal-rootfs.tar.gz -C /mnt/img_rootfs
@@ -338,7 +345,7 @@ jobs:
 
           # Cleanup and unmount
           sudo umount /mnt/img_rootfs
-          sudo losetup -d "$LOOP_DEV"
+          sudo kpartx -d radxa-cubie-a7z-custom.img
           sudo rmdir /mnt/img_rootfs
 
           echo "✓ Complete bootable image created"

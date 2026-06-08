@@ -39,7 +39,7 @@ echo "Image size: ${IMAGE_SIZE} MB"
 echo ""
 
 # Check dependencies
-for cmd in parted sfdisk mkfs.vfat mkfs.ext4 dd tar; do
+for cmd in parted mkfs.vfat mkfs.ext4 dd tar kpartx; do
     if ! command -v $cmd &>/dev/null; then
         echo "Error: Required command '$cmd' not found"
         exit 1
@@ -89,19 +89,28 @@ sfdisk --part-type "$OUTPUT_IMAGE" 3 8300  # Linux filesystem
 echo "✓ Partition table created"
 parted -s "$OUTPUT_IMAGE" print
 
-# Step 3: Setup loop device
+# Step 3: Setup loop device with kpartx
 echo ""
-echo "[3/9] Setting up loop device..."
-LOOP_DEV=$(sudo losetup -f --show -P "$OUTPUT_IMAGE")
+echo "[3/9] Setting up loop device with kpartx..."
+sudo kpartx -av "$OUTPUT_IMAGE"
 sleep 2
-echo "✓ Loop device: $LOOP_DEV"
+
+# Find the loop device that was created
+LOOP_BASE=$(sudo losetup -j "$OUTPUT_IMAGE" | cut -d: -f1)
+if [ -z "$LOOP_BASE" ]; then
+    echo "Error: Failed to find loop device"
+    exit 1
+fi
+echo "✓ Loop device: $LOOP_BASE"
 
 # Step 4: Format partitions
 echo ""
 echo "[4/9] Formatting partitions..."
-sudo mkfs.ext4 -F -L config "${LOOP_DEV}p1"
-sudo mkfs.vfat -F 32 -n BOOT "${LOOP_DEV}p2"
-sudo mkfs.ext4 -F -L rootfs "${LOOP_DEV}p3"
+# kpartx creates /dev/mapper/loopXpY devices
+MAPPER_PREFIX=$(basename "$LOOP_BASE")
+sudo mkfs.ext4 -F -L config "/dev/mapper/${MAPPER_PREFIX}p1"
+sudo mkfs.vfat -F 32 -n BOOT "/dev/mapper/${MAPPER_PREFIX}p2"
+sudo mkfs.ext4 -F -L rootfs "/dev/mapper/${MAPPER_PREFIX}p3"
 echo "✓ Partitions formatted"
 
 # Step 5: Mount partitions
@@ -111,9 +120,9 @@ sudo mkdir -p "$WORK_DIR/mnt/config"
 sudo mkdir -p "$WORK_DIR/mnt/boot"
 sudo mkdir -p "$WORK_DIR/mnt/rootfs"
 
-sudo mount "${LOOP_DEV}p1" "$WORK_DIR/mnt/config"
-sudo mount "${LOOP_DEV}p2" "$WORK_DIR/mnt/boot"
-sudo mount "${LOOP_DEV}p3" "$WORK_DIR/mnt/rootfs"
+sudo mount "/dev/mapper/${MAPPER_PREFIX}p1" "$WORK_DIR/mnt/config"
+sudo mount "/dev/mapper/${MAPPER_PREFIX}p2" "$WORK_DIR/mnt/boot"
+sudo mount "/dev/mapper/${MAPPER_PREFIX}p3" "$WORK_DIR/mnt/rootfs"
 echo "✓ Partitions mounted"
 
 # Step 6: Extract kernel tarball
@@ -188,7 +197,7 @@ echo "[9/9] Writing boot sectors..."
 # Check if we have extracted boot sectors from stock image
 if [ -f "extracted_a7z/boot-sectors.img" ]; then
     echo "Using boot sectors from stock A7Z image..."
-    sudo dd if="extracted_a7z/boot-sectors.img" of="$LOOP_DEV" bs=1K seek=8 conv=notrunc,fsync
+    sudo dd if="extracted_a7z/boot-sectors.img" of="$LOOP_BASE" bs=1K seek=8 conv=notrunc,fsync
     echo "  ✓ Wrote 16 MB boot sectors (boot0 + U-Boot)"
 else
     echo "⚠ Warning: Stock boot sectors not found at extracted_a7z/boot-sectors.img"
@@ -201,7 +210,7 @@ fi
 echo ""
 echo "Cleaning up..."
 sudo umount "$WORK_DIR/mnt/config" "$WORK_DIR/mnt/boot" "$WORK_DIR/mnt/rootfs" 2>/dev/null || true
-sudo losetup -d "$LOOP_DEV"
+sudo kpartx -d "$OUTPUT_IMAGE"
 sudo rm -rf "$WORK_DIR"
 
 echo ""
