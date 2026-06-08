@@ -258,9 +258,9 @@ jobs:
           echo "Decompressing stock image..."
           pixz -d stock-a7z.img.xz
 
-          # Verify image structure
+          # Verify image structure - use gdisk for GPT
           echo "Checking image partition table..."
-          fdisk -l stock-a7z.img || true
+          sudo sgdisk -p stock-a7z.img || true
           file stock-a7z.img
 
           # Extract first 16 MB (boot0 + U-Boot)
@@ -268,34 +268,31 @@ jobs:
           mkdir -p extracted_a7z
           dd if=stock-a7z.img of=extracted_a7z/boot-sectors.img bs=1M count=16
 
-          # Use kpartx to create device mappings
-          echo "Creating partition mappings with kpartx..."
-          sudo kpartx -av stock-a7z.img
-          sleep 3
+          # Mount GPT image - use offset calculation
+          echo "Mounting stock image to extract minimal rootfs..."
 
-          # List created mappings
-          echo "Available device mappings:"
-          ls -la /dev/mapper/ || true
+          # Get partition 3 offset and size using sfdisk (works with GPT)
+          PART3_START=$(sudo sfdisk -J stock-a7z.img 2>/dev/null | grep -A 10 '"node": "/dev/loop.p3"' | grep '"start"' | grep -o '[0-9]*' || echo "")
 
-          # Check if mappings were created
-          ROOTFS_DEV=$(ls /dev/mapper/loop*p3 2>/dev/null | head -1 || echo "")
-          if [ -z "$ROOTFS_DEV" ]; then
-            echo "ERROR: kpartx did not create partition mappings"
-            echo "Trying alternative: losetup with partition scan..."
-
-            # Fallback to losetup with explicit partx
+          if [ -z "$PART3_START" ]; then
+            echo "Using losetup+partx for GPT..."
             LOOP_DEV=$(sudo losetup -f --show stock-a7z.img)
             echo "Loop device: $LOOP_DEV"
 
-            # Force partition scan with partx
-            sudo partx -av "$LOOP_DEV" || true
-            sleep 2
+            # Use partx with GPT support
+            sudo partx -a "$LOOP_DEV" || true
+            sleep 3
 
             # List partitions
             ls -la ${LOOP_DEV}* || true
             lsblk "$LOOP_DEV" || true
 
             ROOTFS_DEV="${LOOP_DEV}p3"
+          else
+            echo "Using direct offset mount..."
+            OFFSET=$((PART3_START * 512))
+            LOOP_DEV=$(sudo losetup -f --show -o "$OFFSET" stock-a7z.img)
+            ROOTFS_DEV="$LOOP_DEV"
           fi
 
           echo "Using rootfs device: $ROOTFS_DEV"
@@ -314,11 +311,7 @@ jobs:
 
           # Cleanup
           sudo umount /mnt/stock_rootfs
-          if [ -n "$LOOP_DEV" ]; then
-            sudo losetup -d "$LOOP_DEV" || true
-          else
-            sudo kpartx -d stock-a7z.img || true
-          fi
+          sudo losetup -d "$LOOP_DEV" || true
           sudo rmdir /mnt/stock_rootfs
           rm -f stock-a7z.img
 
@@ -338,22 +331,20 @@ jobs:
           # Run image builder
           sudo bash scripts/build-complete-image.sh "$KERNEL_TARBALL" radxa-cubie-a7z-custom.img
 
-          # Mount image to add rootfs - try kpartx first, fallback to losetup+partx
+          # Mount image to add rootfs - use partx for GPT
           echo "Adding Debian rootfs to image..."
 
-          sudo kpartx -av radxa-cubie-a7z-custom.img
+          LOOP_DEV=$(sudo losetup -f --show radxa-cubie-a7z-custom.img)
+          sudo partx -a "$LOOP_DEV" || true
           sleep 3
 
-          ROOTFS_DEV=$(ls /dev/mapper/loop*p3 2>/dev/null | tail -1 || echo "")
-          if [ -z "$ROOTFS_DEV" ]; then
-            echo "kpartx failed, using losetup+partx..."
-            LOOP_DEV=$(sudo losetup -f --show radxa-cubie-a7z-custom.img)
-            sudo partx -av "$LOOP_DEV" || true
-            sleep 2
-            ROOTFS_DEV="${LOOP_DEV}p3"
-          fi
+          # List available partitions
+          ls -la ${LOOP_DEV}* || true
+          lsblk "$LOOP_DEV" || true
 
+          ROOTFS_DEV="${LOOP_DEV}p3"
           echo "Mounting rootfs at: $ROOTFS_DEV"
+
           sudo mkdir -p /mnt/img_rootfs
           sudo mount "$ROOTFS_DEV" /mnt/img_rootfs
 
@@ -378,11 +369,7 @@ jobs:
 
           # Cleanup and unmount
           sudo umount /mnt/img_rootfs
-          if [ -n "$LOOP_DEV" ]; then
-            sudo losetup -d "$LOOP_DEV" || true
-          else
-            sudo kpartx -d radxa-cubie-a7z-custom.img || true
-          fi
+          sudo losetup -d "$LOOP_DEV" || true
           sudo rmdir /mnt/img_rootfs
 
           echo "✓ Complete bootable image created"
