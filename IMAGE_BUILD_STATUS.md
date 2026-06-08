@@ -1,73 +1,106 @@
 # A7Z Complete Image Build - Status Update
 
-## Progress: Image Build Pipeline Added
+## Current Status: Strategy Changed to Minimal Bootable Image (2026-06-09)
 
-### ✅ Completed (2026-06-09)
+### 🔄 Critical Issue Resolved
 
-1. **GitHub Actions Extended**
-   - Added `build-image` job for A7Z
-   - Downloads stock image for boot sectors + minimal rootfs
-   - Creates 4GB bootable image with GPT partitions
+**Problem**: Stock A7Z image downloads unavailable
+- GitHub releases return `Content-Length: 0` (all .img.xz files)
+- Radxa official site returns 404
+- Downloaded images have empty GPT partition tables
+
+**New Strategy**: Build minimal bootable image without stock dependencies
+- Use Alpine Linux minimal rootfs (~3MB)
+- Include custom kernel + modules
+- Create proper GPT partition structure
+- Document missing boot sectors clearly
+
+### ✅ Latest Changes (Commit pending)
+
+1. **CI Workflow Updated**
+   - Downloads Alpine Linux aarch64 minirootfs instead of stock image
+   - Creates complete GPT-partitioned image with proper structure
+   - Includes custom overclocked kernel
    - Compresses to .img.xz format
-   - Commit: 8a8b6c3
 
-2. **Image Build Script Created**
-   - `scripts/build-complete-image.sh`
-   - Complete partition layout (sda1/2/3)
-   - Boot sector integration
-   - Kernel + modules installation
+2. **Build Script Enhanced**
+   - Clear warning messages when boot sectors unavailable
+   - Status tracking: `✅ BOOTABLE` vs `⚠️ NEEDS BOOT SECTORS`
+   - Detailed instructions for adding boot sectors manually
 
-3. **WSL Extraction Script**
-   - `scripts/extract-resources-wsl.sh`
-   - Optimized for Windows/WSL environment
+### 📦 What CI Will Produce
 
-### ⚠️ Current Blocker: Windows Sudo Disabled
+**Kernel Artifacts** (both A7A + A7Z):
+- ✅ Kernel Image + DTBs
+- ✅ Kernel modules with overclock support
+- ✅ Build manifests and checksums
 
-WSL resource extraction requires sudo for loop device mounting.
+**Complete A7Z Image** (radxa-cubie-a7z-custom.img.xz):
+- ✅ GPT partition table (sda1: config 16MB, sda2: boot 300MB, sda3: rootfs)
+- ✅ Formatted partitions (ext4 + vfat)
+- ✅ Custom kernel 6.6.98+ installed to /boot
+- ✅ Kernel modules installed to /lib/modules
+- ✅ Alpine Linux minimal rootfs
+- ✅ Proper fstab for UFS (/dev/sda*)
+- ⚠️ Boot sectors (boot0 + U-Boot) NOT included
 
-**Solution Options:**
+### 🔧 Making Image Bootable
 
-1. **Enable Windows Sudo** (Recommended)
-   - Open Settings → Developers
-   - Enable "Sudo for Windows"
-   - Restart WSL
-
-2. **Use GitHub Actions Instead**
-   - CI already has all tools and permissions
-   - Let CI build complete images automatically
-   - Download final .img.xz from Actions artifacts
-
-3. **Use Alternative Tool**
-   - DiskGenius (Windows GUI) to manually extract DTB/config
-   - 7-Zip can browse img partitions
-
-### 📋 Next CI Build Will Produce:
-
-When GitHub Actions runs (already pushed):
-- ✅ Kernel tarballs (A7A + A7Z) - 30 MB each
-- ✅ Complete A7Z bootable image - radxa-cubie-a7z-custom.img.xz
-- ✅ SHA256 checksums for verification
-- ✅ Ready to flash to A7Z hardware
-
-### Workflow URL:
-https://github.com/KrOik/radxa-cubie-a7a-kernel/actions
-
-### Manual Testing (if sudo enabled):
+**Option 1: Add Boot Sectors from Stock Image** (when available)
 ```bash
-# Enable sudo in Windows Settings → Developers first
-bash scripts/extract-resources-wsl.sh
+# Extract boot sectors from any working A7Z image
+dd if=stock-a7z.img of=boot-sectors.img bs=1M count=16
 
-# Then build image locally
-bash scripts/build-complete-image.sh release-tarball-a7z.tar.gz test-a7z.img
+# Write to custom image
+xz -d radxa-cubie-a7z-custom.img.xz
+dd if=boot-sectors.img of=radxa-cubie-a7z-custom.img bs=1K seek=8 conv=notrunc
+xz -9 radxa-cubie-a7z-custom.img
 ```
 
-### Local Resource Status:
-- ✅ Stock A7Z image: extracted_a7z/a7z-stock.img (10 GB)
-- ✅ Boot sectors extracted: extracted_a7z/boot-sectors.img (16 MB)
-- ❌ DTB/config extraction: Blocked by sudo requirement
+**Option 2: Boot from SD Card** (workaround)
+1. Flash custom image to A7Z UFS
+2. Boot A7Z from SD card with working U-Boot
+3. U-Boot will find and boot kernel from UFS partition 2
 
-## Recommendation:
+**Option 3: Use Existing A7Z** (for testing)
+1. Boot existing A7Z system
+2. Replace kernel modules: `rsync -av lib/modules/* /lib/modules/`
+3. Replace kernel Image: `cp boot/Image /boot/`
+4. Reboot to test overclocked kernel
 
-**Let GitHub Actions build the complete image** - it has all tools, permissions, and will run automatically on next push or can be triggered manually via workflow_dispatch.
+### 📋 Next Steps
 
-The complete .img.xz will be production-ready and downloadable from Actions artifacts.
+1. ✅ Commit strategy changes
+2. ⏳ Trigger CI build
+3. ⏳ Verify complete image artifact
+4. ⏳ Test image on A7Z hardware (requires boot sectors or SD boot)
+
+### Previous Status History
+
+<details>
+<summary>Cache Fix (Commit 55b3736)</summary>
+
+**Error**: Clone failures due to cache key instability
+**Fix**: Stabilized cache key, removed `hashFiles()`, added cleanup step
+**Result**: CI sources clone successfully
+</details>
+
+<details>
+<summary>Package Dependencies (Commit dbe3113)</summary>
+
+**Error**: `sfdisk` package not found
+**Fix**: Changed to `util-linux` package
+**Result**: All dependencies install correctly
+</details>
+
+<details>
+<summary>Loop Device Handling Attempts</summary>
+
+**Tried**:
+1. `losetup -P` - partitions not created
+2. `kpartx` - cannot handle GPT properly  
+3. `partx -a` - failed due to empty GPT in stock image
+
+**Root Cause**: Stock image files unavailable/corrupted
+**Resolution**: Changed to minimal image strategy
+</details>
