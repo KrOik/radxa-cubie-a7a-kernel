@@ -81,19 +81,21 @@ jobs:
         run: |
           echo "Cloning kernel repository..."
           git clone --branch ${{ env.KERNEL_BRANCH }} --depth 1 \
-            https://github.com/radxa/kernel.git kernel-6.6
+            https://github.com/radxa/kernel.git kernel-6.6 || exit 1
 
           echo "Cloning BSP repository v1.4.8..."
           git clone --branch ${{ env.BSP_BRANCH }} --depth 1 \
-            https://github.com/radxa/allwinner-bsp.git allwinner-bsp-1.4.8
+            https://github.com/radxa/allwinner-bsp.git allwinner-bsp-1.4.8 || exit 1
 
           echo "Cloning BSP repository v1.4.6 (WiFi driver)..."
           git clone --branch ${{ env.BSP_WIFI_BRANCH }} --depth 1 \
-            https://github.com/radxa/allwinner-bsp.git allwinner-bsp-1.4.6
+            https://github.com/radxa/allwinner-bsp.git allwinner-bsp-1.4.6 || exit 1
 
           echo "Cloning device repository..."
           git clone --branch ${{ env.DEVICE_BRANCH }} --depth 1 \
-            https://github.com/radxa/allwinner-device.git allwinner-device-1.4.8
+            https://github.com/radxa/allwinner-device.git allwinner-device-1.4.8 || exit 1
+
+          echo "All sources cloned successfully"
 
       - name: Apply patches
         run: |
