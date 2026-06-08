@@ -98,22 +98,37 @@ jobs:
       - name: Apply patches
         run: |
           if [ -f scripts/apply-patches.sh ]; then
-            bash scripts/apply-patches.sh || echo "No patches to apply"
+            chmod +x scripts/apply-patches.sh
+            bash scripts/apply-patches.sh
+          else
+            echo "No patches script found, skipping..."
           fi
 
       - name: Setup kernel tree
         run: |
-          bash scripts/setup-kernel.sh
+          chmod +x scripts/setup-kernel.sh
+          bash scripts/setup-kernel.sh ${{ matrix.board }}
 
       - name: Configure kernel
         run: |
           cd kernel-6.6
+
+          # Determine defconfig based on board
+          if [ "${{ matrix.board }}" = "a7z" ] && [ -f arch/arm64/configs/cubie_a7z_defconfig ]; then
+            DEFCONFIG="cubie_a7z_defconfig"
+          else
+            DEFCONFIG="cubie_a7a_defconfig"
+          fi
+
+          echo "Using defconfig: ${DEFCONFIG}"
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            BSP_TOP=bsp/ cubie_a7a_defconfig
+            BSP_TOP=bsp/ ${DEFCONFIG}
 
           # Show kernel version
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            BSP_TOP=bsp/ kernelrelease
+          KERNEL_VERSION=$(make -s ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            BSP_TOP=bsp/ kernelrelease)
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
+          echo "Building kernel version: ${KERNEL_VERSION}"
 
       - name: Build kernel Image and DTBs
         run: |
@@ -130,14 +145,13 @@ jobs:
       - name: Install modules
         run: |
           cd kernel-6.6
-          KERNEL_VERSION=$(make -s kernelrelease)
           mkdir -p ../artifacts/${{ matrix.board }}/lib/modules
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             modules_install \
             INSTALL_MOD_PATH=../artifacts/${{ matrix.board }} \
             INSTALL_MOD_STRIP=1
 
-          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
+          echo "Modules installed for kernel version: ${{ env.KERNEL_VERSION }}"
 
       - name: Package build artifacts
         run: |
@@ -169,11 +183,15 @@ jobs:
 
       - name: Create release tarball
         run: |
+          TARBALL_NAME="radxa-cubie-${{ matrix.board }}-kernel-${GITHUB_SHA:0:7}.tar.gz"
+
           cd artifacts/${{ matrix.board }}
-          tar -czf ../../radxa-cubie-${{ matrix.board }}-kernel-${GITHUB_SHA:0:7}.tar.gz *
+          tar -czf ../../${TARBALL_NAME} *
           cd ../..
-          sha256sum radxa-cubie-${{ matrix.board }}-kernel-${GITHUB_SHA:0:7}.tar.gz > \
-            radxa-cubie-${{ matrix.board }}-kernel-${GITHUB_SHA:0:7}.tar.gz.sha256
+
+          sha256sum ${TARBALL_NAME} > ${TARBALL_NAME}.sha256
+          echo "Created release tarball: ${TARBALL_NAME}"
+          ls -lh ${TARBALL_NAME}*
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
