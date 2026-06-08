@@ -153,6 +153,13 @@ jobs:
 
           echo "Modules installed for kernel version: ${{ env.KERNEL_VERSION }}"
 
+          # Clean up BSP ramfs and other unnecessary files from build symlink
+          # These contain broken symlinks that break artifact upload
+          if [ -d "../artifacts/${{ matrix.board }}/lib/modules/${{ env.KERNEL_VERSION }}/build/bsp/ramfs" ]; then
+            echo "Removing BSP ramfs to avoid broken symlinks..."
+            rm -rf "../artifacts/${{ matrix.board }}/lib/modules/${{ env.KERNEL_VERSION }}/build/bsp/ramfs"
+          fi
+
       - name: Package build artifacts
         run: |
           mkdir -p artifacts/${{ matrix.board }}/boot
