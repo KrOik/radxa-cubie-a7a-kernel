@@ -217,9 +217,146 @@ jobs:
             radxa-cubie-${{ matrix.board }}-kernel-*.tar.gz.sha256
           retention-days: 90
 
+  build-image:
+    name: Build Complete Image (A7Z only)
+    needs: build-kernel
+    runs-on: ubuntu-24.04
+    if: success()
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install image build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            parted sfdisk gdisk \
+            dosfstools e2fsprogs \
+            xz-utils pixz \
+            qemu-user-static binfmt-support
+
+      - name: Download A7Z kernel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-tarball-a7z
+          path: ./
+
+      - name: Extract boot sectors from stock image
+        run: |
+          # Download stock A7Z image for boot sectors
+          wget -q https://github.com/radxa-build/radxa-a733/releases/download/rsdk-r6/radxa-a733_bullseye_kde_r6.output_4096.img.xz \
+            -O stock-a7z.img.xz
+
+          # Decompress (using pixz for speed)
+          echo "Decompressing stock image..."
+          pixz -d stock-a7z.img.xz
+
+          # Extract first 16 MB (boot0 + U-Boot)
+          echo "Extracting boot sectors..."
+          mkdir -p extracted_a7z
+          dd if=stock-a7z.img of=extracted_a7z/boot-sectors.img bs=1M count=16
+
+          # Also extract rootfs for minimal Debian base
+          echo "Mounting stock image to extract minimal rootfs..."
+          LOOP_DEV=$(sudo losetup -f --show stock-a7z.img)
+          sudo partprobe "$LOOP_DEV"
+          sleep 2
+
+          sudo mkdir -p /mnt/stock_rootfs
+          sudo mount "${LOOP_DEV}p3" /mnt/stock_rootfs
+
+          # Create minimal rootfs tarball (exclude kernel modules, we'll use ours)
+          echo "Creating minimal rootfs tarball..."
+          sudo tar -czf minimal-rootfs.tar.gz \
+            --exclude='./lib/modules/*' \
+            --exclude='./boot/*' \
+            --exclude='./var/cache/*' \
+            --exclude='./tmp/*' \
+            -C /mnt/stock_rootfs .
+
+          sudo umount /mnt/stock_rootfs
+          sudo losetup -d "$LOOP_DEV"
+          sudo rmdir /mnt/stock_rootfs
+
+          # Cleanup large stock image
+          rm -f stock-a7z.img
+
+          echo "✓ Boot sectors and minimal rootfs extracted"
+
+      - name: Build complete A7Z image
+        run: |
+          chmod +x scripts/build-complete-image.sh
+
+          # Extract kernel tarball first
+          KERNEL_TARBALL=$(ls radxa-cubie-a7z-kernel-*.tar.gz | head -1)
+          echo "Using kernel tarball: $KERNEL_TARBALL"
+
+          mkdir -p kernel_staging
+          tar -xzf "$KERNEL_TARBALL" -C kernel_staging/
+
+          # Run image builder
+          sudo bash scripts/build-complete-image.sh "$KERNEL_TARBALL" radxa-cubie-a7z-custom.img
+
+          # Mount image to add rootfs
+          echo "Adding Debian rootfs to image..."
+          LOOP_DEV=$(sudo losetup -f --show radxa-cubie-a7z-custom.img)
+          sudo partprobe "$LOOP_DEV"
+          sleep 2
+
+          sudo mkdir -p /mnt/img_rootfs
+          sudo mount "${LOOP_DEV}p3" /mnt/img_rootfs
+
+          # Extract minimal rootfs
+          sudo tar -xzf minimal-rootfs.tar.gz -C /mnt/img_rootfs
+
+          # Install our custom kernel modules (overwrite stock)
+          if [ -d kernel_staging/lib/modules ]; then
+            sudo cp -r kernel_staging/lib/modules/* /mnt/img_rootfs/lib/modules/
+          fi
+
+          # Update fstab for UFS
+          sudo tee /mnt/img_rootfs/etc/fstab >/dev/null <<'EOF'
+          # <file system> <mount point> <type> <options> <dump> <pass>
+          /dev/sda3       /             ext4   defaults,noatime 0 1
+          /dev/sda2       /boot         vfat   defaults         0 2
+          /dev/sda1       /boot/config  ext4   defaults         0 2
+          EOF
+
+          # Update hostname
+          echo "radxa-cubie-a7z-custom" | sudo tee /mnt/img_rootfs/etc/hostname
+
+          # Cleanup and unmount
+          sudo umount /mnt/img_rootfs
+          sudo losetup -d "$LOOP_DEV"
+          sudo rmdir /mnt/img_rootfs
+
+          echo "✓ Complete bootable image created"
+
+      - name: Compress image
+        run: |
+          echo "Compressing image with xz (level 9)..."
+          xz -9 -T0 -v radxa-cubie-a7z-custom.img
+
+          # Calculate checksum
+          sha256sum radxa-cubie-a7z-custom.img.xz > radxa-cubie-a7z-custom.img.xz.sha256
+
+          echo "✓ Image compressed"
+          ls -lh radxa-cubie-a7z-custom.img.xz*
+
+      - name: Upload complete image
+        uses: actions/upload-artifact@v4
+        with:
+          name: complete-image-a7z
+          path: |
+            radxa-cubie-a7z-custom.img.xz
+            radxa-cubie-a7z-custom.img.xz.sha256
+          retention-days: 90
+          compression-level: 0  # Already compressed
+
   build-summary:
     name: Build Summary
-    needs: build-kernel
+    needs: [build-kernel, build-image]
     runs-on: ubuntu-latest
     if: always()
 
@@ -228,16 +365,12 @@ jobs:
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Board | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.build-kernel.result }}" == "success" ]; then
-            echo "| A7A | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-            echo "| A7Z | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| A7A | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-            echo "| A7Z | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-          fi
-
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| A7A Kernel | ${{ needs.build-kernel.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| A7Z Kernel | ${{ needs.build-kernel.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| A7Z Complete Image | ${{ needs.build-image.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Artifacts are available in the Actions tab for 30 days." >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Kernel tarballs available for 90 days" >> $GITHUB_STEP_SUMMARY
+          echo "- Complete A7Z image (.img.xz) ready for flashing" >> $GITHUB_STEP_SUMMARY
