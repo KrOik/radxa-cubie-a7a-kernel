@@ -276,7 +276,7 @@ jobs:
           echo "✓ Complete A7Z image ready"
           echo "  - Debian 13 Trixie (minimal base system)"
           echo "  - Custom overclocked kernel"
-          echo "  - SSH enabled, NetworkManager configured"
+          echo "  - SSH enabled, DHCP networking configured"
           echo "  - Default users: root/debian, radxa/radxa"
 
       - name: Compress image

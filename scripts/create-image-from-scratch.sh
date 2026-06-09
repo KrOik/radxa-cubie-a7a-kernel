@@ -97,7 +97,7 @@ echo "[6/8] Installing Debian 13 Trixie base system..."
 echo "  This will take 5-10 minutes..."
 
 sudo debootstrap --arch=arm64 --variant=minbase \
-    --include=systemd,udev,kmod,init,locales,ca-certificates,apt-utils,sudo,openssh-server,network-manager \
+    --include=systemd,udev,kmod,init,locales,ca-certificates,apt-utils,sudo,openssh-server,ifupdown,isc-dhcp-client \
     trixie "$ROOTFS_MNT" http://deb.debian.org/debian
 
 echo "✓ Debian 13 base system installed"
@@ -146,12 +146,25 @@ echo "radxa:radxa" | sudo chroot "$ROOTFS_MNT" chpasswd
 # Enable SSH
 sudo chroot "$ROOTFS_MNT" systemctl enable ssh
 
+# Configure network interfaces for DHCP
+sudo tee "$ROOTFS_MNT/etc/network/interfaces" >/dev/null <<'EOF'
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+
+auto end0
+iface end0 inet dhcp
+EOF
+
 # Configure locales
 echo "en_US.UTF-8 UTF-8" | sudo tee "$ROOTFS_MNT/etc/locale.gen" >/dev/null
 sudo chroot "$ROOTFS_MNT" locale-gen
 
 echo "✓ System configured"
 echo "  Default credentials: root/debian, radxa/radxa"
+echo "  Network: DHCP on eth0/end0"
 
 # Step 8: Cleanup and unmount
 echo ""
