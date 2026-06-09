@@ -264,27 +264,34 @@ jobs:
           echo "  SHA256: 7ee46c3dc79be90e965603cde9b5c48cb13dca894f6803c732eee3adcd5d1f76"
           echo "  Contains: Debian Bullseye + KDE desktop + preinstalled apps"
 
-      - name: Build complete A7Z image
+      - name: Build complete A7Z image with Debian 13
         run: |
-          chmod +x scripts/create-bootable-from-stock.sh
-
           KERNEL_TARBALL=$(ls radxa-cubie-a7z-kernel-*.tar.gz | head -1)
-          echo "Using kernel tarball: $KERNEL_TARBALL"
-
-          # Use stock image base to preserve boot sectors + GPT + full Debian system
-          echo "Building complete A7Z image from stock base..."
-          echo "  Stock base: Debian Bullseye + KDE desktop + apps (~1.1GB compressed)"
-          echo "  Custom kernel: 6.6.98+ with A55 2800MHz, A76 3000MHz overclock"
+          echo "Building complete A7Z image with Debian 13 + custom kernel..."
+          echo ""
+          echo "Process:"
+          echo "  1. Decompress stock Debian 11 image (1.1GB → 4GB)"
+          echo "  2. Mount rootfs and chroot"
+          echo "  3. Upgrade Debian 11 → 12 → 13 via apt"
+          echo "  4. Install custom kernel 6.6.98+ (A55 2800MHz, A76 3000MHz)"
+          echo "  5. Fix known issues (growroot, bashrc)"
+          echo "  6. Compress final image"
           echo ""
 
-          sudo bash scripts/create-bootable-from-stock.sh stock-a7z.img.xz "$KERNEL_TARBALL"
+          # Decompress stock image
+          echo "Decompressing stock image..."
+          xz -d -k stock-a7z.img.xz
+          mv stock-a7z.img radxa-cubie-a7z-custom.img
 
-          # Rename output to match artifact expectations
-          mv radxa-cubie-a7z-bootable-final.img radxa-cubie-a7z-custom.img
+          # Upgrade to Debian 13 and install custom kernel
+          chmod +x scripts/upgrade-debian-in-image.sh
+          sudo bash scripts/upgrade-debian-in-image.sh radxa-cubie-a7z-custom.img "$KERNEL_TARBALL"
 
           echo ""
-          echo "✓ Complete A7Z image created"
-          echo "  Contains: Debian 13 upgrade path + KDE + custom overclocked kernel"
+          echo "✓ Complete A7Z image ready"
+          echo "  - Debian 13 Trixie (full system)"
+          echo "  - KDE desktop + preinstalled apps"
+          echo "  - Custom overclocked kernel"
 
       - name: Compress image
         run: |
