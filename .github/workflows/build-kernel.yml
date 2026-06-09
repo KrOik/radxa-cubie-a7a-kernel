@@ -242,7 +242,7 @@ jobs:
             dosfstools e2fsprogs \
             xz-utils pixz \
             qemu-user-static binfmt-support \
-            kpartx
+            debootstrap
 
       - name: Download A7Z kernel artifacts (from previous successful build)
         run: |
@@ -254,114 +254,56 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Download stock A7Z image
-        run: |
-          echo "Downloading stock Radxa A733 image (Debian Bullseye base)..."
-
-          # Primary: Radxa official build releases (rsdk-r6)
-          STOCK_URL="https://github.com/radxa-build/radxa-a733/releases/download/rsdk-r6/radxa-a733_bullseye_kde_r6.output_4096.img.xz"
-          EXPECTED_SHA256="7ee46c3dc79be90e965603cde9b5c48cb13dca894f6803c732eee3adcd5d1f76"
-
-          echo "Source: $STOCK_URL"
-          wget --progress=bar:force:noscroll "$STOCK_URL" -O stock-a7z.img.xz
-
-          # Verify checksum
-          ACTUAL_SHA256=$(sha256sum stock-a7z.img.xz | awk '{print $1}')
-          echo "Expected SHA256: $EXPECTED_SHA256"
-          echo "Actual SHA256:   $ACTUAL_SHA256"
-
-          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-            echo "ERROR: SHA256 mismatch! Image may be corrupted."
-            exit 1
-          fi
-
-          STOCK_SIZE=$(stat -c%s stock-a7z.img.xz)
-          echo ""
-          echo "✓ Stock image downloaded and verified: $((STOCK_SIZE / 1024 / 1024)) MB"
-          echo "  Contains: Debian Bullseye + KDE desktop + preinstalled apps"
-
-      - name: Build complete A7Z image with Debian 13
+      - name: Build complete A7Z image from scratch
         run: |
           KERNEL_TARBALL=$(ls radxa-cubie-a7z-kernel-*.tar.gz | head -1)
-          echo "Building complete A7Z image with Debian 13 + custom kernel..."
+          echo "Building Debian 13 A7Z image from scratch..."
           echo ""
           echo "Process:"
-          echo "  1. Decompress stock Debian 11 image (1.1GB → 4GB)"
-          echo "  2. Mount rootfs and chroot"
-          echo "  3. Upgrade Debian 11 → 12 → 13 via apt"
+          echo "  1. Create 10GB disk image with GPT partitioning"
+          echo "  2. Format boot (128MB) and root (9.8GB) partitions"
+          echo "  3. Install Debian 13 Trixie base system via debootstrap"
           echo "  4. Install custom kernel 6.6.98+ (A55 2800MHz, A76 3000MHz)"
-          echo "  5. Fix known issues (growroot, bashrc)"
-          echo "  6. Compress final image"
+          echo "  5. Configure system (users, SSH, networking)"
+          echo "  6. Create bootloader config"
           echo ""
 
-          # Decompress stock image
-          echo "Decompressing stock image..."
-          xz -d -k stock-a7z.img.xz
-          mv stock-a7z.img radxa-cubie-a7z-custom.img
-
-          # Verify partition table is readable
-          echo ""
-          echo "Verifying decompressed image partition table..."
-
-          # Run parted and capture all output
-          set +e
-          PARTED_INFO=$(parted -s radxa-cubie-a7z-custom.img print 2>&1)
-          PARTED_EXIT=$?
-          set -e
-
-          echo "Parted exit code: $PARTED_EXIT"
-          echo "Parted output:"
-          echo "$PARTED_INFO"
-
-          if [ $PARTED_EXIT -ne 0 ] && [ $PARTED_EXIT -ne 1 ]; then
-            echo "ERROR: parted failed with exit code $PARTED_EXIT"
-            file radxa-cubie-a7z-custom.img
-            exit 1
-          fi
-
-          if ! echo "$PARTED_INFO" | grep -q "Partition Table:"; then
-            echo "ERROR: No partition table found in parted output"
-            file radxa-cubie-a7z-custom.img
-            exit 1
-          fi
-
-          echo "✓ Partition table verified"
-
-          # Upgrade to Debian 13 and install custom kernel
-          chmod +x scripts/upgrade-debian-in-image.sh
-          sudo bash scripts/upgrade-debian-in-image.sh radxa-cubie-a7z-custom.img "$KERNEL_TARBALL"
+          # Build image from scratch
+          chmod +x scripts/create-image-from-scratch.sh
+          sudo bash scripts/create-image-from-scratch.sh radxa-cubie-a7z-debian13.img "$KERNEL_TARBALL" 10
 
           echo ""
           echo "✓ Complete A7Z image ready"
-          echo "  - Debian 13 Trixie (full system)"
-          echo "  - KDE desktop + preinstalled apps"
+          echo "  - Debian 13 Trixie (minimal base system)"
           echo "  - Custom overclocked kernel"
+          echo "  - SSH enabled, NetworkManager configured"
+          echo "  - Default users: root/debian, radxa/radxa"
 
       - name: Compress image
         run: |
           echo "Compressing image with xz (level 9)..."
           # xz will complain about setting file group but compression succeeds
-          xz -9 -T0 -v radxa-cubie-a7z-custom.img 2>&1 | grep -v "Cannot set the file group" || true
+          xz -9 -T0 -v radxa-cubie-a7z-debian13.img 2>&1 | grep -v "Cannot set the file group" || true
 
           # Verify compressed file exists
-          if [ ! -f radxa-cubie-a7z-custom.img.xz ]; then
+          if [ ! -f radxa-cubie-a7z-debian13.img.xz ]; then
             echo "ERROR: Compression failed - output file not found"
             exit 1
           fi
 
           # Calculate checksum
-          sha256sum radxa-cubie-a7z-custom.img.xz > radxa-cubie-a7z-custom.img.xz.sha256
+          sha256sum radxa-cubie-a7z-debian13.img.xz > radxa-cubie-a7z-debian13.img.xz.sha256
 
           echo "✓ Image compressed"
-          ls -lh radxa-cubie-a7z-custom.img.xz*
+          ls -lh radxa-cubie-a7z-debian13.img.xz*
 
       - name: Upload complete image
         uses: actions/upload-artifact@v4
         with:
           name: complete-image-a7z
           path: |
-            radxa-cubie-a7z-custom.img.xz
-            radxa-cubie-a7z-custom.img.xz.sha256
+            radxa-cubie-a7z-debian13.img.xz
+            radxa-cubie-a7z-debian13.img.xz.sha256
           retention-days: 90
           compression-level: 0  # Already compressed
 
