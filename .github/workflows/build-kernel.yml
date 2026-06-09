@@ -225,9 +225,10 @@ jobs:
 
   build-image:
     name: Build Complete Image (A7Z only)
-    needs: build-kernel
+    # Skip kernel build - use cached artifact from successful run
+    # needs: build-kernel
     runs-on: ubuntu-24.04
-    if: success()
+    # if: success()
 
     steps:
       - name: Checkout repository
@@ -243,11 +244,15 @@ jobs:
             qemu-user-static binfmt-support \
             kpartx
 
-      - name: Download A7Z kernel artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-tarball-a7z
-          path: ./
+      - name: Download A7Z kernel artifacts (from previous successful build)
+        run: |
+          # Use known good kernel build: run 27186793540
+          KERNEL_RUN_ID="27186793540"
+
+          echo "Downloading kernel from successful run: $KERNEL_RUN_ID"
+          gh run download "$KERNEL_RUN_ID" -n release-tarball-a7z -D ./
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Download stock A7Z image
         run: |

@@ -30,26 +30,53 @@ echo "✓ Kernel extracted"
 echo ""
 echo "[1/6] Mounting image partitions..."
 LOOP_DEV=$(sudo losetup -f --show "$IMAGE_FILE")
+echo "✓ Loop device created: $LOOP_DEV"
 
-# Use kpartx instead of partx (more reliable in CI environments)
-sudo kpartx -av "$LOOP_DEV"
+# Force kernel to re-read partition table
+sudo partprobe "$LOOP_DEV" 2>/dev/null || true
+sleep 2
+
+# Try kpartx first
+echo "Trying kpartx to create partition mappings..."
+KPARTX_OUTPUT=$(sudo kpartx -av "$LOOP_DEV" 2>&1)
+echo "$KPARTX_OUTPUT"
 sleep 3
 
-# Find the actual partition devices (kpartx creates /dev/mapper/loopXpY)
+# Check which method worked
 LOOP_NAME=$(basename "$LOOP_DEV")
-BOOT_PART="/dev/mapper/${LOOP_NAME}p2"
-ROOTFS_PART="/dev/mapper/${LOOP_NAME}p3"
+if [ -b "/dev/mapper/${LOOP_NAME}p2" ]; then
+    # kpartx worked - use mapper devices
+    BOOT_PART="/dev/mapper/${LOOP_NAME}p2"
+    ROOTFS_PART="/dev/mapper/${LOOP_NAME}p3"
+    USING_KPARTX=1
+    echo "✓ Using kpartx mapper devices"
+elif [ -b "${LOOP_DEV}p2" ]; then
+    # Direct partition devices exist
+    BOOT_PART="${LOOP_DEV}p2"
+    ROOTFS_PART="${LOOP_DEV}p3"
+    USING_KPARTX=0
+    echo "✓ Using direct loop partition devices"
+else
+    echo "ERROR: No partition devices found"
+    echo "Attempting manual partx..."
+    sudo partx -av "$LOOP_DEV"
+    sleep 2
 
-# Verify partitions exist
-if [ ! -b "$ROOTFS_PART" ]; then
-    echo "ERROR: Rootfs partition not found: $ROOTFS_PART"
-    echo "Available devices:"
-    ls -la /dev/mapper/ || true
-    sudo losetup -d "$LOOP_DEV"
-    exit 1
+    if [ -b "${LOOP_DEV}p2" ]; then
+        BOOT_PART="${LOOP_DEV}p2"
+        ROOTFS_PART="${LOOP_DEV}p3"
+        USING_KPARTX=0
+        echo "✓ partx succeeded"
+    else
+        echo "ERROR: All partition detection methods failed"
+        echo "Available devices:"
+        ls -la /dev/mapper/ || true
+        ls -la ${LOOP_DEV}* || true
+        sudo losetup -d "$LOOP_DEV"
+        exit 1
+    fi
 fi
 
-echo "✓ Loop device: $LOOP_DEV"
 echo "✓ Boot partition: $BOOT_PART"
 echo "✓ Rootfs partition: $ROOTFS_PART"
 
@@ -187,8 +214,10 @@ sudo umount "$ROOTFS_MNT/dev" || true
 sudo umount "$ROOTFS_MNT/boot" || true
 sudo umount "$ROOTFS_MNT" || true
 
-# Remove kpartx mappings
-sudo kpartx -dv "$LOOP_DEV" || true
+# Remove mappings if kpartx was used
+if [ "$USING_KPARTX" = "1" ]; then
+    sudo kpartx -dv "$LOOP_DEV" || true
+fi
 
 # Detach loop device
 sudo losetup -d "$LOOP_DEV" || true
