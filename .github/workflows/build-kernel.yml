@@ -242,7 +242,7 @@ jobs:
             dosfstools e2fsprogs \
             xz-utils pixz \
             qemu-user-static binfmt-support \
-            debootstrap
+            debootstrap wget curl
 
       - name: Download A7Z kernel artifacts (from previous successful build)
         run: |
@@ -254,56 +254,75 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Build complete A7Z image from scratch
+      - name: Download stock A7Z boot image
+        run: |
+          echo "Downloading official Radxa A7Z image for U-Boot extraction..."
+          STOCK_URL="https://github.com/radxa-build/radxa-a733/releases/download/20250425-1422/radxa-a733_bullseye_kde_r6.output_4096.img.xz"
+          wget -O radxa-a733_bullseye_kde_r6.output_4096.img.xz "$STOCK_URL"
+          echo "✓ Stock image downloaded"
+          ls -lh radxa-a733_bullseye_kde_r6.output_4096.img.xz
+
+      - name: Build UFS-compatible A7Z image (4096-byte sectors)
         run: |
           KERNEL_TARBALL=$(ls radxa-cubie-a7z-kernel-*.tar.gz | head -1)
-          echo "Building Debian 13 A7Z image from scratch..."
+          echo "Building UFS-compatible A7Z image with 4096-byte sectors..."
+          echo ""
+          echo "⚠️  IMPORTANT: UFS storage requires 4096-byte logical sectors!"
+          echo "   Standard 512-byte sector images will NOT boot on UFS."
           echo ""
           echo "Process:"
-          echo "  1. Create 10GB disk image with GPT partitioning"
-          echo "  2. Format boot (128MB) and root (9.8GB) partitions"
-          echo "  3. Install Debian 13 Trixie base system via debootstrap"
-          echo "  4. Install custom kernel 6.6.98+ (A55 2800MHz, A76 3000MHz)"
-          echo "  5. Configure system (users, SSH, networking)"
-          echo "  6. Create bootloader config"
+          echo "  1. Create 4GB disk image with 4096-byte sectors"
+          echo "  2. Create GPT partition table (4K-aligned)"
+          echo "  3. Extract U-Boot from official image"
+          echo "  4. Format boot and root partitions (4K blocks)"
+          echo "  5. Install Debian 13 Trixie base system"
+          echo "  6. Install custom kernel 6.6.98+ (A55 2800MHz, A76 3000MHz)"
+          echo "  7. Configure system (users, SSH, networking)"
           echo ""
 
-          # Build image from scratch
-          chmod +x scripts/create-image-from-scratch.sh
-          sudo bash scripts/create-image-from-scratch.sh radxa-cubie-a7z-debian13.img "$KERNEL_TARBALL" 10
+          # Build UFS-compatible image
+          chmod +x scripts/create-ufs-image.sh
+          sudo bash scripts/create-ufs-image.sh \
+            radxa-cubie-a7z-ufs.img \
+            "$KERNEL_TARBALL" \
+            radxa-a733_bullseye_kde_r6.output_4096.img.xz \
+            4
 
           echo ""
-          echo "✓ Complete A7Z image ready"
-          echo "  - Debian 13 Trixie (minimal base system)"
+          echo "✅ UFS-Compatible A7Z Image Ready"
+          echo "  - Sector size: 4096 bytes (UFS compatible)"
+          echo "  - Debian 13 Trixie (minimal base)"
           echo "  - Custom overclocked kernel"
-          echo "  - SSH enabled, DHCP networking configured"
+          echo "  - SSH enabled, DHCP networking"
           echo "  - Default users: root/debian, radxa/radxa"
+          echo ""
+          echo "⚠️  Flash with: sudo dd if=image.img of=/dev/sdX bs=4096 status=progress"
 
       - name: Compress image
         run: |
-          echo "Compressing image with xz (level 9)..."
+          echo "Compressing UFS image with xz (level 9)..."
           # xz will complain about setting file group but compression succeeds
-          xz -9 -T0 -v radxa-cubie-a7z-debian13.img 2>&1 | grep -v "Cannot set the file group" || true
+          xz -9 -T0 -v radxa-cubie-a7z-ufs.img 2>&1 | grep -v "Cannot set the file group" || true
 
           # Verify compressed file exists
-          if [ ! -f radxa-cubie-a7z-debian13.img.xz ]; then
+          if [ ! -f radxa-cubie-a7z-ufs.img.xz ]; then
             echo "ERROR: Compression failed - output file not found"
             exit 1
           fi
 
           # Calculate checksum
-          sha256sum radxa-cubie-a7z-debian13.img.xz > radxa-cubie-a7z-debian13.img.xz.sha256
+          sha256sum radxa-cubie-a7z-ufs.img.xz > radxa-cubie-a7z-ufs.img.xz.sha256
 
-          echo "✓ Image compressed"
-          ls -lh radxa-cubie-a7z-debian13.img.xz*
+          echo "✓ UFS image compressed"
+          ls -lh radxa-cubie-a7z-ufs.img.xz*
 
-      - name: Upload complete image
+      - name: Upload UFS-compatible image
         uses: actions/upload-artifact@v4
         with:
-          name: complete-image-a7z
+          name: ufs-image-a7z
           path: |
-            radxa-cubie-a7z-debian13.img.xz
-            radxa-cubie-a7z-debian13.img.xz.sha256
+            radxa-cubie-a7z-ufs.img.xz
+            radxa-cubie-a7z-ufs.img.xz.sha256
           retention-days: 90
           compression-level: 0  # Already compressed
 
@@ -322,8 +341,17 @@ jobs:
           echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| A7A Kernel | ${{ needs.build-kernel.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| A7Z Kernel | ${{ needs.build-kernel.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| A7Z Complete Image | ${{ needs.build-image.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| A7Z UFS Image (4096-byte sectors) | ${{ needs.build-image.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "- Kernel tarballs available for 90 days" >> $GITHUB_STEP_SUMMARY
-          echo "- Complete A7Z image (.img.xz) ready for flashing" >> $GITHUB_STEP_SUMMARY
+          echo "- **UFS-compatible A7Z image** (.img.xz) with 4096-byte sectors" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚠️ Important Flash Instructions" >> $GITHUB_STEP_SUMMARY
+          echo "UFS storage requires special handling:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "# MUST use bs=4096 for UFS devices" >> $GITHUB_STEP_SUMMARY
+          echo "sudo dd if=radxa-cubie-a7z-ufs.img of=/dev/sdX bs=4096 status=progress" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Standard 512-byte sector images will NOT boot on UFS storage." >> $GITHUB_STEP_SUMMARY
