@@ -30,48 +30,51 @@ echo "✓ Kernel extracted"
 echo ""
 echo "[1/6] Mounting image partitions..."
 
+# Temporarily disable pipefail for partition detection
+set +e
+
 # Use sgdisk to get GPT partition info (most reliable for GPT)
 if command -v sgdisk >/dev/null 2>&1; then
     echo "Using sgdisk to read GPT partition table..."
-    # Redirect stderr to see any warnings, don't fail on warnings
-    BOOT_INFO=$(sgdisk -i 2 "$IMAGE_FILE" 2>&1) || true
-    ROOTFS_INFO=$(sgdisk -i 3 "$IMAGE_FILE" 2>&1) || true
+    # Capture all output including stderr
+    BOOT_INFO=$(sgdisk -i 2 "$IMAGE_FILE" 2>&1)
+    ROOTFS_INFO=$(sgdisk -i 3 "$IMAGE_FILE" 2>&1)
     BOOT_START=$(echo "$BOOT_INFO" | grep "First sector:" | awk '{print $3}')
     ROOTFS_START=$(echo "$ROOTFS_INFO" | grep "First sector:" | awk '{print $3}')
 
     if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
         echo "sgdisk failed, trying parted..."
-        echo "sgdisk partition 2 output: $BOOT_INFO"
-        echo "sgdisk partition 3 output: $ROOTFS_INFO"
+        echo "sgdisk partition 2 output:"
+        echo "$BOOT_INFO"
+        echo "sgdisk partition 3 output:"
+        echo "$ROOTFS_INFO"
     fi
-elif command -v parted >/dev/null 2>&1; then
-    echo "Using parted to read GPT partition table..."
-    PARTED_OUTPUT=$(parted -s "$IMAGE_FILE" unit s print 2>/dev/null)
-    BOOT_START=$(echo "$PARTED_OUTPUT" | awk '/^ 2 / {print $2}' | sed 's/s$//')
-    ROOTFS_START=$(echo "$PARTED_OUTPUT" | awk '/^ 3 / {print $2}' | sed 's/s$//')
 fi
 
 # Fallback to parted if sgdisk didn't work
 if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
     if command -v parted >/dev/null 2>&1; then
         echo "Falling back to parted..."
-        PARTED_OUTPUT=$(parted -s "$IMAGE_FILE" unit s print 2>/dev/null)
+        PARTED_OUTPUT=$(parted -s "$IMAGE_FILE" unit s print 2>&1)
+        echo "Partition table:"
         echo "$PARTED_OUTPUT" | grep "^ [0-9]"
         BOOT_START=$(echo "$PARTED_OUTPUT" | awk '/^ 2 / {print $2}' | sed 's/s$//')
         ROOTFS_START=$(echo "$PARTED_OUTPUT" | awk '/^ 3 / {print $2}' | sed 's/s$//')
     fi
 fi
 
+# Re-enable error handling
+set -e
+
 if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
     echo "ERROR: Failed to detect partition offsets"
     echo "BOOT_START=$BOOT_START, ROOTFS_START=$ROOTFS_START"
-    echo "Trying to show partition table:"
-    if command -v sgdisk >/dev/null 2>&1; then
-        sgdisk -p "$IMAGE_FILE" 2>&1 || true
-    fi
-    if command -v parted >/dev/null 2>&1; then
-        parted -s "$IMAGE_FILE" unit s print 2>&1 || true
-    fi
+    echo ""
+    echo "Full partition table (sgdisk):"
+    sgdisk -p "$IMAGE_FILE" 2>&1 || true
+    echo ""
+    echo "Full partition table (parted):"
+    parted -s "$IMAGE_FILE" unit s print 2>&1 || true
     exit 1
 fi
 
