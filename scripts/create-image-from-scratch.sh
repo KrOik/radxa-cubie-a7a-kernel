@@ -59,16 +59,20 @@ echo ""
 echo "[3/8] Setting up loop devices..."
 PARTED_OUTPUT=$(parted -s "$IMAGE_FILE" unit s print)
 BOOT_START=$(echo "$PARTED_OUTPUT" | awk '/^ 2 / {print $2}' | sed 's/s$//')
+BOOT_END=$(echo "$PARTED_OUTPUT" | awk '/^ 2 / {print $3}' | sed 's/s$//')
 ROOTFS_START=$(echo "$PARTED_OUTPUT" | awk '/^ 3 / {print $2}' | sed 's/s$//')
+ROOTFS_END=$(echo "$PARTED_OUTPUT" | awk '/^ 3 / {print $3}' | sed 's/s$//')
 
 BOOT_OFFSET=$((BOOT_START * 512))
+BOOT_SIZE=$(( (BOOT_END - BOOT_START + 1) * 512 ))
 ROOTFS_OFFSET=$((ROOTFS_START * 512))
+ROOTFS_SIZE=$(( (ROOTFS_END - ROOTFS_START + 1) * 512 ))
 
-BOOT_LOOP=$(sudo losetup -f --show -o $BOOT_OFFSET "$IMAGE_FILE")
-ROOTFS_LOOP=$(sudo losetup -f --show -o $ROOTFS_OFFSET "$IMAGE_FILE")
+BOOT_LOOP=$(sudo losetup -f --show -o $BOOT_OFFSET --sizelimit $BOOT_SIZE "$IMAGE_FILE")
+ROOTFS_LOOP=$(sudo losetup -f --show -o $ROOTFS_OFFSET --sizelimit $ROOTFS_SIZE "$IMAGE_FILE")
 
-echo "✓ Boot loop: $BOOT_LOOP (offset $BOOT_OFFSET)"
-echo "✓ Root loop: $ROOTFS_LOOP (offset $ROOTFS_OFFSET)"
+echo "✓ Boot loop: $BOOT_LOOP (offset $BOOT_OFFSET, size $BOOT_SIZE bytes)"
+echo "✓ Root loop: $ROOTFS_LOOP (offset $ROOTFS_OFFSET, size $ROOTFS_SIZE bytes)"
 
 # Step 4: Format partitions
 echo ""
