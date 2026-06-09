@@ -260,14 +260,24 @@ jobs:
 
           # Primary: Radxa official build releases (rsdk-r6)
           STOCK_URL="https://github.com/radxa-build/radxa-a733/releases/download/rsdk-r6/radxa-a733_bullseye_kde_r6.output_4096.img.xz"
+          EXPECTED_SHA256="7ee46c3dc79be90e965603cde9b5c48cb13dca894f6803c732eee3adcd5d1f76"
 
           echo "Source: $STOCK_URL"
           wget --progress=bar:force:noscroll "$STOCK_URL" -O stock-a7z.img.xz
 
+          # Verify checksum
+          ACTUAL_SHA256=$(sha256sum stock-a7z.img.xz | awk '{print $1}')
+          echo "Expected SHA256: $EXPECTED_SHA256"
+          echo "Actual SHA256:   $ACTUAL_SHA256"
+
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "ERROR: SHA256 mismatch! Image may be corrupted."
+            exit 1
+          fi
+
           STOCK_SIZE=$(stat -c%s stock-a7z.img.xz)
           echo ""
-          echo "✓ Stock image downloaded: $((STOCK_SIZE / 1024 / 1024)) MB"
-          echo "  SHA256: 7ee46c3dc79be90e965603cde9b5c48cb13dca894f6803c732eee3adcd5d1f76"
+          echo "✓ Stock image downloaded and verified: $((STOCK_SIZE / 1024 / 1024)) MB"
           echo "  Contains: Debian Bullseye + KDE desktop + preinstalled apps"
 
       - name: Build complete A7Z image with Debian 13
@@ -288,6 +298,19 @@ jobs:
           echo "Decompressing stock image..."
           xz -d -k stock-a7z.img.xz
           mv stock-a7z.img radxa-cubie-a7z-custom.img
+
+          # Verify partition table is readable
+          echo ""
+          echo "Verifying decompressed image partition table..."
+          if ! parted -s radxa-cubie-a7z-custom.img print 2>&1 | grep -q "Partition Table:"; then
+            echo "ERROR: Decompressed image has no readable partition table!"
+            echo "Running diagnostics:"
+            file radxa-cubie-a7z-custom.img
+            parted -s radxa-cubie-a7z-custom.img print 2>&1 || true
+            sgdisk -p radxa-cubie-a7z-custom.img 2>&1 || true
+            exit 1
+          fi
+          echo "✓ Partition table verified"
 
           # Upgrade to Debian 13 and install custom kernel
           chmod +x scripts/upgrade-debian-in-image.sh
