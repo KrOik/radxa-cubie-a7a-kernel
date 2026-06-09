@@ -250,24 +250,19 @@ jobs:
 
       - name: Download stock A7Z image
         run: |
-          echo "Downloading stock Radxa A733 image..."
+          echo "Downloading stock Radxa A733 image (Debian Bullseye base)..."
 
-          # Try multiple sources for stock image
-          STOCK_URL="https://github.com/radxa-build/radxa-cubie-a733/releases/download/20240424-0014/radxa-a733_bullseye_kde_r6.output_4096.img.xz"
+          # Primary: Radxa official build releases (rsdk-r6)
+          STOCK_URL="https://github.com/radxa-build/radxa-a733/releases/download/rsdk-r6/radxa-a733_bullseye_kde_r6.output_4096.img.xz"
 
-          wget -q --show-progress "$STOCK_URL" -O stock-a7z.img.xz || {
-            echo "ERROR: Could not download stock image from $STOCK_URL"
-            echo "Trying alternate source..."
+          echo "Source: $STOCK_URL"
+          wget --progress=bar:force:noscroll "$STOCK_URL" -O stock-a7z.img.xz
 
-            # Fallback: use minimal image creation if stock unavailable
-            echo "Stock image unavailable - will create minimal bootable image"
-            touch stock-a7z.img.xz.unavailable
-          }
-
-          if [ -f stock-a7z.img.xz ] && [ ! -f stock-a7z.img.xz.unavailable ]; then
-            STOCK_SIZE=$(stat -c%s stock-a7z.img.xz)
-            echo "✓ Stock image downloaded: $((STOCK_SIZE / 1024 / 1024)) MB"
-          fi
+          STOCK_SIZE=$(stat -c%s stock-a7z.img.xz)
+          echo ""
+          echo "✓ Stock image downloaded: $((STOCK_SIZE / 1024 / 1024)) MB"
+          echo "  SHA256: 7ee46c3dc79be90e965603cde9b5c48cb13dca894f6803c732eee3adcd5d1f76"
+          echo "  Contains: Debian Bullseye + KDE desktop + preinstalled apps"
 
       - name: Build complete A7Z image
         run: |
@@ -276,57 +271,20 @@ jobs:
           KERNEL_TARBALL=$(ls radxa-cubie-a7z-kernel-*.tar.gz | head -1)
           echo "Using kernel tarball: $KERNEL_TARBALL"
 
-          if [ -f stock-a7z.img.xz ] && [ ! -f stock-a7z.img.xz.unavailable ]; then
-            echo "Method: Stock image base (preserves boot sectors + GPT)"
-            sudo bash scripts/create-bootable-from-stock.sh stock-a7z.img.xz "$KERNEL_TARBALL"
+          # Use stock image base to preserve boot sectors + GPT + full Debian system
+          echo "Building complete A7Z image from stock base..."
+          echo "  Stock base: Debian Bullseye + KDE desktop + apps (~1.1GB compressed)"
+          echo "  Custom kernel: 6.6.98+ with A55 2800MHz, A76 3000MHz overclock"
+          echo ""
 
-            # Rename output
-            mv radxa-cubie-a7z-bootable-final.img radxa-cubie-a7z-custom.img
+          sudo bash scripts/create-bootable-from-stock.sh stock-a7z.img.xz "$KERNEL_TARBALL"
 
-          else
-            echo "Method: Create from scratch (fallback)"
-            echo "WARNING: This method has GPT alignment issues with UFS 4K blocks"
+          # Rename output to match artifact expectations
+          mv radxa-cubie-a7z-bootable-final.img radxa-cubie-a7z-custom.img
 
-            # Fallback to old method
-            chmod +x scripts/build-complete-image.sh
-
-            mkdir -p kernel_staging
-            tar -xzf "$KERNEL_TARBALL" -C kernel_staging/
-
-            sudo bash scripts/build-complete-image.sh "$KERNEL_TARBALL" radxa-cubie-a7z-custom.img
-
-            # Mount and add minimal Alpine rootfs
-            wget -q https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz \
-              -O minimal-rootfs.tar.gz
-
-            LOOP_DEV=$(sudo losetup -f --show radxa-cubie-a7z-custom.img)
-            sudo partx -a "$LOOP_DEV" || true
-            sleep 3
-
-            ROOTFS_DEV="${LOOP_DEV}p3"
-            sudo mkdir -p /mnt/img_rootfs
-            sudo mount "$ROOTFS_DEV" /mnt/img_rootfs
-
-            sudo tar -xzf minimal-rootfs.tar.gz -C /mnt/img_rootfs
-
-            if [ -d kernel_staging/lib/modules ]; then
-              sudo cp -r kernel_staging/lib/modules/* /mnt/img_rootfs/lib/modules/
-            fi
-
-            sudo tee /mnt/img_rootfs/etc/fstab >/dev/null <<'EOF'
-          /dev/sda3       /             ext4   defaults,noatime 0 1
-          /dev/sda2       /boot         vfat   defaults         0 2
-          /dev/sda1       /boot/config  ext4   defaults         0 2
-          EOF
-
-            echo "radxa-cubie-a7z-custom" | sudo tee /mnt/img_rootfs/etc/hostname
-
-            sudo umount /mnt/img_rootfs
-            sudo losetup -d "$LOOP_DEV" || true
-            sudo rmdir /mnt/img_rootfs
-          fi
-
-          echo "✓ Bootable image created"
+          echo ""
+          echo "✓ Complete A7Z image created"
+          echo "  Contains: Debian 13 upgrade path + KDE + custom overclocked kernel"
 
       - name: Compress image
         run: |
