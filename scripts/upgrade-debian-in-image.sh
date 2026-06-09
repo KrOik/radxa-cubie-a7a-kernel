@@ -30,18 +30,19 @@ echo "✓ Kernel extracted"
 echo ""
 echo "[1/6] Mounting image partitions..."
 
-# Get partition layout
-PARTITION_INFO=$(fdisk -l "$IMAGE_FILE" | grep "^${IMAGE_FILE}")
+# Get partition layout using sfdisk (works with GPT)
+PARTITION_INFO=$(sfdisk -d "$IMAGE_FILE" 2>/dev/null | grep "^${IMAGE_FILE}")
 echo "Partition layout:"
 echo "$PARTITION_INFO"
 
 # Extract start sectors for partition 2 (boot) and 3 (rootfs)
-BOOT_START=$(echo "$PARTITION_INFO" | awk 'NR==2 {print $2}')
-ROOTFS_START=$(echo "$PARTITION_INFO" | awk 'NR==3 {print $2}')
+BOOT_START=$(echo "$PARTITION_INFO" | grep "${IMAGE_FILE}2" | sed -n 's/.*start=\s*\([0-9]*\).*/\1/p')
+ROOTFS_START=$(echo "$PARTITION_INFO" | grep "${IMAGE_FILE}3" | sed -n 's/.*start=\s*\([0-9]*\).*/\1/p')
 
 if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
     echo "ERROR: Failed to detect partition offsets"
-    fdisk -l "$IMAGE_FILE"
+    echo "Full partition table:"
+    sfdisk -d "$IMAGE_FILE" 2>&1 || true
     exit 1
 fi
 
