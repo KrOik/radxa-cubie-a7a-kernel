@@ -302,14 +302,19 @@ jobs:
           # Verify partition table is readable
           echo ""
           echo "Verifying decompressed image partition table..."
-          if ! parted -s radxa-cubie-a7z-custom.img print 2>&1 | grep -q "Partition Table:"; then
+          PARTED_INFO=$(parted -s radxa-cubie-a7z-custom.img print 2>&1)
+
+          if ! echo "$PARTED_INFO" | grep -q "Partition Table:"; then
             echo "ERROR: Decompressed image has no readable partition table!"
             echo "Running diagnostics:"
             file radxa-cubie-a7z-custom.img
-            parted -s radxa-cubie-a7z-custom.img print 2>&1 || true
+            echo "$PARTED_INFO"
             sgdisk -p radxa-cubie-a7z-custom.img 2>&1 || true
             exit 1
           fi
+
+          echo "Partition table info:"
+          echo "$PARTED_INFO" | grep -E "Partition Table:|Number|^ [0-9]"
           echo "✓ Partition table verified"
 
           # Upgrade to Debian 13 and install custom kernel
