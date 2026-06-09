@@ -248,84 +248,85 @@ jobs:
           name: release-tarball-a7z
           path: ./
 
-      - name: Extract boot sectors from stock image
+      - name: Download stock A7Z image
         run: |
-          echo "Note: Stock image downloads are currently unavailable."
-          echo "Creating minimal bootable image with extracted boot sectors from local cache."
+          echo "Downloading stock Radxa A733 image..."
 
-          # Create placeholder for boot sectors
-          # Boot sectors will be created by build-complete-image.sh using existing pattern
-          mkdir -p extracted_a7z
+          # Try multiple sources for stock image
+          STOCK_URL="https://github.com/radxa-build/radxa-cubie-a733/releases/download/20240424-0014/radxa-a733_bullseye_kde_r6.output_4096.img.xz"
 
-          # Use a minimal Alpine Linux rootfs tarball (much smaller, ~3MB compressed)
-          echo "Downloading minimal Alpine Linux rootfs..."
-          wget -q https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz \
-            -O minimal-rootfs.tar.gz
+          wget -q --show-progress "$STOCK_URL" -O stock-a7z.img.xz || {
+            echo "ERROR: Could not download stock image from $STOCK_URL"
+            echo "Trying alternate source..."
 
-          # Verify download
-          if [ ! -f minimal-rootfs.tar.gz ] || [ ! -s minimal-rootfs.tar.gz ]; then
-            echo "ERROR: Failed to download Alpine rootfs"
-            exit 1
+            # Fallback: use minimal image creation if stock unavailable
+            echo "Stock image unavailable - will create minimal bootable image"
+            touch stock-a7z.img.xz.unavailable
+          }
+
+          if [ -f stock-a7z.img.xz ] && [ ! -f stock-a7z.img.xz.unavailable ]; then
+            STOCK_SIZE=$(stat -c%s stock-a7z.img.xz)
+            echo "✓ Stock image downloaded: $((STOCK_SIZE / 1024 / 1024)) MB"
           fi
-
-          echo "✓ Minimal rootfs prepared (Alpine Linux base)"
 
       - name: Build complete A7Z image
         run: |
-          chmod +x scripts/build-complete-image.sh
+          chmod +x scripts/create-bootable-from-stock.sh
 
-          # Extract kernel tarball first
           KERNEL_TARBALL=$(ls radxa-cubie-a7z-kernel-*.tar.gz | head -1)
           echo "Using kernel tarball: $KERNEL_TARBALL"
 
-          mkdir -p kernel_staging
-          tar -xzf "$KERNEL_TARBALL" -C kernel_staging/
+          if [ -f stock-a7z.img.xz ] && [ ! -f stock-a7z.img.xz.unavailable ]; then
+            echo "Method: Stock image base (preserves boot sectors + GPT)"
+            sudo bash scripts/create-bootable-from-stock.sh stock-a7z.img.xz "$KERNEL_TARBALL"
 
-          # Run image builder
-          sudo bash scripts/build-complete-image.sh "$KERNEL_TARBALL" radxa-cubie-a7z-custom.img
+            # Rename output
+            mv radxa-cubie-a7z-bootable-final.img radxa-cubie-a7z-custom.img
 
-          # Mount image to add rootfs - use partx for GPT
-          echo "Adding Debian rootfs to image..."
+          else
+            echo "Method: Create from scratch (fallback)"
+            echo "WARNING: This method has GPT alignment issues with UFS 4K blocks"
 
-          LOOP_DEV=$(sudo losetup -f --show radxa-cubie-a7z-custom.img)
-          sudo partx -a "$LOOP_DEV" || true
-          sleep 3
+            # Fallback to old method
+            chmod +x scripts/build-complete-image.sh
 
-          # List available partitions
-          ls -la ${LOOP_DEV}* || true
-          lsblk "$LOOP_DEV" || true
+            mkdir -p kernel_staging
+            tar -xzf "$KERNEL_TARBALL" -C kernel_staging/
 
-          ROOTFS_DEV="${LOOP_DEV}p3"
-          echo "Mounting rootfs at: $ROOTFS_DEV"
+            sudo bash scripts/build-complete-image.sh "$KERNEL_TARBALL" radxa-cubie-a7z-custom.img
 
-          sudo mkdir -p /mnt/img_rootfs
-          sudo mount "$ROOTFS_DEV" /mnt/img_rootfs
+            # Mount and add minimal Alpine rootfs
+            wget -q https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz \
+              -O minimal-rootfs.tar.gz
 
-          # Extract minimal rootfs
-          sudo tar -xzf minimal-rootfs.tar.gz -C /mnt/img_rootfs
+            LOOP_DEV=$(sudo losetup -f --show radxa-cubie-a7z-custom.img)
+            sudo partx -a "$LOOP_DEV" || true
+            sleep 3
 
-          # Install our custom kernel modules (overwrite stock)
-          if [ -d kernel_staging/lib/modules ]; then
-            sudo cp -r kernel_staging/lib/modules/* /mnt/img_rootfs/lib/modules/
-          fi
+            ROOTFS_DEV="${LOOP_DEV}p3"
+            sudo mkdir -p /mnt/img_rootfs
+            sudo mount "$ROOTFS_DEV" /mnt/img_rootfs
 
-          # Update fstab for UFS
-          sudo tee /mnt/img_rootfs/etc/fstab >/dev/null <<'EOF'
-          # <file system> <mount point> <type> <options> <dump> <pass>
+            sudo tar -xzf minimal-rootfs.tar.gz -C /mnt/img_rootfs
+
+            if [ -d kernel_staging/lib/modules ]; then
+              sudo cp -r kernel_staging/lib/modules/* /mnt/img_rootfs/lib/modules/
+            fi
+
+            sudo tee /mnt/img_rootfs/etc/fstab >/dev/null <<'EOF'
           /dev/sda3       /             ext4   defaults,noatime 0 1
           /dev/sda2       /boot         vfat   defaults         0 2
           /dev/sda1       /boot/config  ext4   defaults         0 2
           EOF
 
-          # Update hostname
-          echo "radxa-cubie-a7z-custom" | sudo tee /mnt/img_rootfs/etc/hostname
+            echo "radxa-cubie-a7z-custom" | sudo tee /mnt/img_rootfs/etc/hostname
 
-          # Cleanup and unmount
-          sudo umount /mnt/img_rootfs
-          sudo losetup -d "$LOOP_DEV" || true
-          sudo rmdir /mnt/img_rootfs
+            sudo umount /mnt/img_rootfs
+            sudo losetup -d "$LOOP_DEV" || true
+            sudo rmdir /mnt/img_rootfs
+          fi
 
-          echo "✓ Complete bootable image created"
+          echo "✓ Bootable image created"
 
       - name: Compress image
         run: |
