@@ -29,49 +29,36 @@ echo "✓ Kernel extracted"
 # Setup loop device
 echo ""
 echo "[1/6] Mounting image partitions..."
-LOOP_DEV=$(sudo losetup -f --show "$IMAGE_FILE")
+LOOP_DEV=$(sudo losetup -fP --show "$IMAGE_FILE")
 echo "✓ Loop device created: $LOOP_DEV"
 
-# Force kernel to re-read partition table
-sudo partprobe "$LOOP_DEV" 2>/dev/null || true
-sleep 2
+# Give kernel time to create partition devices
+sleep 1
 
-# Try kpartx first
-echo "Trying kpartx to create partition mappings..."
-KPARTX_OUTPUT=$(sudo kpartx -av "$LOOP_DEV" 2>&1)
-echo "$KPARTX_OUTPUT"
-sleep 3
-
-# Check which method worked
-LOOP_NAME=$(basename "$LOOP_DEV")
-if [ -b "/dev/mapper/${LOOP_NAME}p2" ]; then
-    # kpartx worked - use mapper devices
-    BOOT_PART="/dev/mapper/${LOOP_NAME}p2"
-    ROOTFS_PART="/dev/mapper/${LOOP_NAME}p3"
-    USING_KPARTX=1
-    echo "✓ Using kpartx mapper devices"
-elif [ -b "${LOOP_DEV}p2" ]; then
-    # Direct partition devices exist
+# Check for direct partition devices (should exist with -P flag)
+if [ -b "${LOOP_DEV}p2" ]; then
     BOOT_PART="${LOOP_DEV}p2"
     ROOTFS_PART="${LOOP_DEV}p3"
     USING_KPARTX=0
     echo "✓ Using direct loop partition devices"
 else
-    echo "ERROR: No partition devices found"
-    echo "Attempting manual partx..."
-    sudo partx -av "$LOOP_DEV"
+    # Fallback: try kpartx
+    echo "Direct partitions not found, trying kpartx..."
+    sudo kpartx -av "$LOOP_DEV" >/dev/null 2>&1
     sleep 2
 
-    if [ -b "${LOOP_DEV}p2" ]; then
-        BOOT_PART="${LOOP_DEV}p2"
-        ROOTFS_PART="${LOOP_DEV}p3"
-        USING_KPARTX=0
-        echo "✓ partx succeeded"
+    LOOP_NAME=$(basename "$LOOP_DEV")
+    if [ -b "/dev/mapper/${LOOP_NAME}p2" ]; then
+        BOOT_PART="/dev/mapper/${LOOP_NAME}p2"
+        ROOTFS_PART="/dev/mapper/${LOOP_NAME}p3"
+        USING_KPARTX=1
+        echo "✓ Using kpartx mapper devices"
     else
-        echo "ERROR: All partition detection methods failed"
-        echo "Available devices:"
-        ls -la /dev/mapper/ || true
-        ls -la ${LOOP_DEV}* || true
+        echo "ERROR: Partition detection failed"
+        echo "Available loop devices:"
+        ls -la ${LOOP_DEV}* 2>/dev/null || true
+        echo "Available mapper devices:"
+        ls -la /dev/mapper/ 2>/dev/null || true
         sudo losetup -d "$LOOP_DEV"
         exit 1
     fi
