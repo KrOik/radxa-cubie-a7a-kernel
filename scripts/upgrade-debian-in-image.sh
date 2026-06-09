@@ -26,46 +26,41 @@ mkdir -p "$KERNEL_STAGING"
 tar -xzf "$KERNEL_TARBALL" -C "$KERNEL_STAGING/"
 echo "✓ Kernel extracted"
 
-# Setup loop device
+# Setup loop device with manual partition offsets
 echo ""
 echo "[1/6] Mounting image partitions..."
-LOOP_DEV=$(sudo losetup -fP --show "$IMAGE_FILE")
-echo "✓ Loop device created: $LOOP_DEV"
 
-# Give kernel time to create partition devices
-sleep 1
+# Get partition layout
+PARTITION_INFO=$(fdisk -l "$IMAGE_FILE" | grep "^${IMAGE_FILE}")
+echo "Partition layout:"
+echo "$PARTITION_INFO"
 
-# Check for direct partition devices (should exist with -P flag)
-if [ -b "${LOOP_DEV}p2" ]; then
-    BOOT_PART="${LOOP_DEV}p2"
-    ROOTFS_PART="${LOOP_DEV}p3"
-    USING_KPARTX=0
-    echo "✓ Using direct loop partition devices"
-else
-    # Fallback: try kpartx
-    echo "Direct partitions not found, trying kpartx..."
-    sudo kpartx -av "$LOOP_DEV" >/dev/null 2>&1
-    sleep 2
+# Extract start sectors for partition 2 (boot) and 3 (rootfs)
+BOOT_START=$(echo "$PARTITION_INFO" | awk 'NR==2 {print $2}')
+ROOTFS_START=$(echo "$PARTITION_INFO" | awk 'NR==3 {print $2}')
 
-    LOOP_NAME=$(basename "$LOOP_DEV")
-    if [ -b "/dev/mapper/${LOOP_NAME}p2" ]; then
-        BOOT_PART="/dev/mapper/${LOOP_NAME}p2"
-        ROOTFS_PART="/dev/mapper/${LOOP_NAME}p3"
-        USING_KPARTX=1
-        echo "✓ Using kpartx mapper devices"
-    else
-        echo "ERROR: Partition detection failed"
-        echo "Available loop devices:"
-        ls -la ${LOOP_DEV}* 2>/dev/null || true
-        echo "Available mapper devices:"
-        ls -la /dev/mapper/ 2>/dev/null || true
-        sudo losetup -d "$LOOP_DEV"
-        exit 1
-    fi
+if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
+    echo "ERROR: Failed to detect partition offsets"
+    fdisk -l "$IMAGE_FILE"
+    exit 1
 fi
 
-echo "✓ Boot partition: $BOOT_PART"
-echo "✓ Rootfs partition: $ROOTFS_PART"
+# Calculate byte offsets (sector * 512)
+BOOT_OFFSET=$((BOOT_START * 512))
+ROOTFS_OFFSET=$((ROOTFS_START * 512))
+
+echo "✓ Boot partition starts at sector $BOOT_START (offset $BOOT_OFFSET)"
+echo "✓ Rootfs partition starts at sector $ROOTFS_START (offset $ROOTFS_OFFSET)"
+
+# Create two separate loop devices with offsets
+BOOT_LOOP=$(sudo losetup -f --show -o $BOOT_OFFSET "$IMAGE_FILE")
+ROOTFS_LOOP=$(sudo losetup -f --show -o $ROOTFS_OFFSET "$IMAGE_FILE")
+
+echo "✓ Boot loop device: $BOOT_LOOP"
+echo "✓ Rootfs loop device: $ROOTFS_LOOP"
+
+BOOT_PART="$BOOT_LOOP"
+ROOTFS_PART="$ROOTFS_LOOP"
 
 # Mount rootfs
 ROOTFS_MNT="/mnt/a7z_upgrade_$$"
@@ -201,13 +196,9 @@ sudo umount "$ROOTFS_MNT/dev" || true
 sudo umount "$ROOTFS_MNT/boot" || true
 sudo umount "$ROOTFS_MNT" || true
 
-# Remove mappings if kpartx was used
-if [ "$USING_KPARTX" = "1" ]; then
-    sudo kpartx -dv "$LOOP_DEV" || true
-fi
-
-# Detach loop device
-sudo losetup -d "$LOOP_DEV" || true
+# Detach loop devices (created with offset)
+sudo losetup -d "$BOOT_LOOP" || true
+sudo losetup -d "$ROOTFS_LOOP" || true
 
 # Remove mount point
 sudo rmdir "$ROOTFS_MNT"
