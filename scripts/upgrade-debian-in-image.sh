@@ -33,16 +33,33 @@ echo "[1/6] Mounting image partitions..."
 # Use sgdisk to get GPT partition info (most reliable for GPT)
 if command -v sgdisk >/dev/null 2>&1; then
     echo "Using sgdisk to read GPT partition table..."
-    BOOT_START=$(sgdisk -i 2 "$IMAGE_FILE" 2>/dev/null | grep "First sector:" | awk '{print $3}')
-    ROOTFS_START=$(sgdisk -i 3 "$IMAGE_FILE" 2>/dev/null | grep "First sector:" | awk '{print $3}')
+    # Redirect stderr to see any warnings, don't fail on warnings
+    BOOT_INFO=$(sgdisk -i 2 "$IMAGE_FILE" 2>&1) || true
+    ROOTFS_INFO=$(sgdisk -i 3 "$IMAGE_FILE" 2>&1) || true
+    BOOT_START=$(echo "$BOOT_INFO" | grep "First sector:" | awk '{print $3}')
+    ROOTFS_START=$(echo "$ROOTFS_INFO" | grep "First sector:" | awk '{print $3}')
+
+    if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
+        echo "sgdisk failed, trying parted..."
+        echo "sgdisk partition 2 output: $BOOT_INFO"
+        echo "sgdisk partition 3 output: $ROOTFS_INFO"
+    fi
 elif command -v parted >/dev/null 2>&1; then
     echo "Using parted to read GPT partition table..."
     PARTED_OUTPUT=$(parted -s "$IMAGE_FILE" unit s print 2>/dev/null)
     BOOT_START=$(echo "$PARTED_OUTPUT" | awk '/^ 2 / {print $2}' | sed 's/s$//')
     ROOTFS_START=$(echo "$PARTED_OUTPUT" | awk '/^ 3 / {print $2}' | sed 's/s$//')
-else
-    echo "ERROR: Neither sgdisk nor parted available"
-    exit 1
+fi
+
+# Fallback to parted if sgdisk didn't work
+if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
+    if command -v parted >/dev/null 2>&1; then
+        echo "Falling back to parted..."
+        PARTED_OUTPUT=$(parted -s "$IMAGE_FILE" unit s print 2>/dev/null)
+        echo "$PARTED_OUTPUT" | grep "^ [0-9]"
+        BOOT_START=$(echo "$PARTED_OUTPUT" | awk '/^ 2 / {print $2}' | sed 's/s$//')
+        ROOTFS_START=$(echo "$PARTED_OUTPUT" | awk '/^ 3 / {print $2}' | sed 's/s$//')
+    fi
 fi
 
 if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
