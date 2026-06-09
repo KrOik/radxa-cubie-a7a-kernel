@@ -30,20 +30,31 @@ echo "✓ Kernel extracted"
 echo ""
 echo "[1/6] Mounting image partitions..."
 
-# Use parted to get GPT partition info
-PARTED_OUTPUT=$(parted -s "$IMAGE_FILE" unit s print 2>/dev/null)
-echo "Partition layout:"
-echo "$PARTED_OUTPUT" | grep "^ [0-9]"
-
-# Extract start sectors for partition 2 (boot) and 3 (rootfs)
-# parted output format: " 2      32768s     163839s    131072s  ext4         boot"
-BOOT_START=$(echo "$PARTED_OUTPUT" | awk '/^ 2 / {print $2}' | sed 's/s$//')
-ROOTFS_START=$(echo "$PARTED_OUTPUT" | awk '/^ 3 / {print $2}' | sed 's/s$//')
+# Use sgdisk to get GPT partition info (most reliable for GPT)
+if command -v sgdisk >/dev/null 2>&1; then
+    echo "Using sgdisk to read GPT partition table..."
+    BOOT_START=$(sgdisk -i 2 "$IMAGE_FILE" 2>/dev/null | grep "First sector:" | awk '{print $3}')
+    ROOTFS_START=$(sgdisk -i 3 "$IMAGE_FILE" 2>/dev/null | grep "First sector:" | awk '{print $3}')
+elif command -v parted >/dev/null 2>&1; then
+    echo "Using parted to read GPT partition table..."
+    PARTED_OUTPUT=$(parted -s "$IMAGE_FILE" unit s print 2>/dev/null)
+    BOOT_START=$(echo "$PARTED_OUTPUT" | awk '/^ 2 / {print $2}' | sed 's/s$//')
+    ROOTFS_START=$(echo "$PARTED_OUTPUT" | awk '/^ 3 / {print $2}' | sed 's/s$//')
+else
+    echo "ERROR: Neither sgdisk nor parted available"
+    exit 1
+fi
 
 if [ -z "$BOOT_START" ] || [ -z "$ROOTFS_START" ]; then
     echo "ERROR: Failed to detect partition offsets"
-    echo "Full partition table:"
-    parted -s "$IMAGE_FILE" unit s print 2>&1 || true
+    echo "BOOT_START=$BOOT_START, ROOTFS_START=$ROOTFS_START"
+    echo "Trying to show partition table:"
+    if command -v sgdisk >/dev/null 2>&1; then
+        sgdisk -p "$IMAGE_FILE" 2>&1 || true
+    fi
+    if command -v parted >/dev/null 2>&1; then
+        parted -s "$IMAGE_FILE" unit s print 2>&1 || true
+    fi
     exit 1
 fi
 
