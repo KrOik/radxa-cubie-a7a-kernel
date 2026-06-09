@@ -240,7 +240,8 @@ jobs:
             parted gdisk util-linux \
             dosfstools e2fsprogs \
             xz-utils pixz \
-            qemu-user-static binfmt-support
+            qemu-user-static binfmt-support \
+            kpartx
 
       - name: Download A7Z kernel artifacts
         uses: actions/download-artifact@v4

@@ -30,11 +30,28 @@ echo "✓ Kernel extracted"
 echo ""
 echo "[1/6] Mounting image partitions..."
 LOOP_DEV=$(sudo losetup -f --show "$IMAGE_FILE")
-sudo partx -a "$LOOP_DEV" || true
-sleep 2
 
-BOOT_PART="${LOOP_DEV}p2"
-ROOTFS_PART="${LOOP_DEV}p3"
+# Use kpartx instead of partx (more reliable in CI environments)
+sudo kpartx -av "$LOOP_DEV"
+sleep 3
+
+# Find the actual partition devices (kpartx creates /dev/mapper/loopXpY)
+LOOP_NAME=$(basename "$LOOP_DEV")
+BOOT_PART="/dev/mapper/${LOOP_NAME}p2"
+ROOTFS_PART="/dev/mapper/${LOOP_NAME}p3"
+
+# Verify partitions exist
+if [ ! -b "$ROOTFS_PART" ]; then
+    echo "ERROR: Rootfs partition not found: $ROOTFS_PART"
+    echo "Available devices:"
+    ls -la /dev/mapper/ || true
+    sudo losetup -d "$LOOP_DEV"
+    exit 1
+fi
+
+echo "✓ Loop device: $LOOP_DEV"
+echo "✓ Boot partition: $BOOT_PART"
+echo "✓ Rootfs partition: $ROOTFS_PART"
 
 # Mount rootfs
 ROOTFS_MNT="/mnt/a7z_upgrade_$$"
@@ -170,8 +187,10 @@ sudo umount "$ROOTFS_MNT/dev" || true
 sudo umount "$ROOTFS_MNT/boot" || true
 sudo umount "$ROOTFS_MNT" || true
 
+# Remove kpartx mappings
+sudo kpartx -dv "$LOOP_DEV" || true
+
 # Detach loop device
-sudo partx -d "$LOOP_DEV" || true
 sudo losetup -d "$LOOP_DEV" || true
 
 # Remove mount point
