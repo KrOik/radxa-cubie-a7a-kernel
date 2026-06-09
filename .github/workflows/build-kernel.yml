@@ -256,11 +256,13 @@ jobs:
 
       - name: Download stock A7Z boot image
         run: |
-          echo "Downloading official Radxa A7Z image for U-Boot extraction..."
-          STOCK_URL="https://github.com/radxa-build/radxa-a733/releases/download/20250425-1422/radxa-a733_bullseye_kde_r6.output_4096.img.xz"
-          wget -O radxa-a733_bullseye_kde_r6.output_4096.img.xz "$STOCK_URL"
+          echo "Downloading stock Radxa A7Z image for U-Boot extraction..."
+          # Download from our own release for reliable CI access
+          gh release download v0.1-stock-boot -p "radxa-a733_bullseye_kde_r6.output_4096.img.xz"
           echo "✓ Stock image downloaded"
           ls -lh radxa-a733_bullseye_kde_r6.output_4096.img.xz
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Build UFS-compatible A7Z image (4096-byte sectors)
         run: |
